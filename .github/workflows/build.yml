@@ -17,7 +17,7 @@ jobs:
         sudo apt update
         sudo apt install -y \
           build-essential zip unzip openjdk-11-jdk python3-pip git ant \
-          autoconf automake libtool libltdl-dev socket
+          autoconf automake libtool libltdl-dev
 
         pip install --upgrade pip
         pip install Cython==0.29.33 virtualenv buildozer
