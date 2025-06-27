@@ -57,7 +57,7 @@ class TimeZone(App):
             tz = ZoneInfo(country_timezones[self.txt_input_time.text])
             now = datetime.now(tz)
             self.time_lbl.color = (1,1,1,1)
-            self.time_lbl.text = f'Country {self.txt_input_time.text.title()} Time is {now.strftime('%H:%M:%S')}'
+            self.time_lbl.text = f"Country {self.txt_input_time.text.title()} Time is {now.strftime('%H:%M:%S')}"
         else:
             self.time_lbl.text = "Error"
             self.time_lbl.color = (1,0,0,1)
