@@ -5,49 +5,169 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.anchorlayout import AnchorLayout
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-class MyApp(App):
+# دیکشنری برخی کشورها و منطقه‌های زمانی‌شان
+country_timezones = {
+    "iran": "Asia/Tehran",
+    "usa": "America/New_York",
+    "germany": "Europe/Berlin",
+    "china": "Asia/Shanghai",
+    "india": "Asia/Kolkata",
+    "japan": "Asia/Tokyo",
+    "russia": "Europe/Moscow",
+    "uae": "Asia/Dubai",
+    "brazil": "America/Sao_Paulo",
+    "uk": "Europe/London"
+}
+
+class TimeZone(App):
     def build(self):
-        lbl = Label(text='Enter your name:', size_hint_y=None, height=50)
-        self.txt_input_name = TextInput(multiline=False, size_hint_y=None, height=50, font_size=30)
-        lbl1 = Label(text='Enter your Email:', size_hint_y=None, height=50)
-        self.txt_input_email = TextInput(multiline=False, size_hint_y=None, height=50, font_size=30)
-        lbl2 = Label(text='Enter your Password:', size_hint_y=None, height=50)
-        self.txt_input_password = TextInput(multiline=False, size_hint_y=None, height=50, font_size=30)
-        btn = Button(text='Submit', size_hint_y=None, height=50)
+        clock = ""
+        name_cont = ""
+        box3 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
 
-        btn.bind(on_press=self.on_click)
+        self.time_lbl = Label(text=f'Country name Time is 00:00:00', font_size=30)
+        self.txt_input_time = TextInput(multiline=False, size_hint_y=None, height=50, font_size=30)
+        btn_find = Button(text='Find', size_hint_y=None, height=80)
+        btn_back = Button(text='Back', size_hint_y=None, height=80)
 
-        box = BoxLayout(orientation='vertical', size_hint=(1, None))
-        box.bind(minimum_height=box.setter('height'))
-        box.add_widget(lbl)
-        box.add_widget(self.txt_input_name)
-        box.add_widget(lbl1)
-        box.add_widget(self.txt_input_email)
-        box.add_widget(lbl2)
-        box.add_widget(self.txt_input_password)
-        box.add_widget(btn)
+        box3.add_widget(self.time_lbl)
+        box3.add_widget(self.txt_input_time)
+        box3.add_widget(btn_find)
+        box3.add_widget(btn_back)
+
+        box3.bind(minimum_height=box3.setter('height'))
+        btn_back.bind(on_press=self.go_back)
+        btn_find.bind(on_press=self.finder)
+
 
         anchor = AnchorLayout(anchor_y='top')
-        anchor.add_widget(box)
+        anchor.add_widget(box3)
         return anchor
 
-    def on_click(self, instance):
-        name = self.txt_input_name.text
-        email = self.txt_input_email.text
-        password = self.txt_input_password.text
+
+    def go_back(self, instance):
+        self.stop()
+        MyApp().run()
+
+    def finder(self, instance):
+        if self.txt_input_time.text in country_timezones:
+            tz = ZoneInfo(country_timezones[self.txt_input_time.text])
+            now = datetime.now(tz)
+            self.time_lbl.color = (1,1,1,1)
+            self.time_lbl.text = f'Country {self.txt_input_time.text.title()} Time is {now.strftime('%H:%M:%S')}'
+        else:
+            self.time_lbl.text = "Error"
+            self.time_lbl.color = (1,0,0,1)
         
-        # ارسال داده به لپ‌تاپ (آی‌پی و پورت لپ‌تاپ خود را وارد کنید)
+
+class Device(App):
+    def build(self):
+        box1 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
+
+        self.lbl = Label(text='IP Address', font_size=30)
+        self.txt_input_ip = TextInput(text='192.168.', multiline=False, size_hint_y=None, height=50, font_size=30)
+        btn_connect = Button(text='Connect Device', size_hint_y=None, height=80)
+        btn_back = Button(text='Back', size_hint_y=None, height=80)
+
+        btn_connect.bind(on_press=self.go_to_send)
+        btn_back.bind(on_press=self.go_back)
+
+        box1.bind(minimum_height=box1.setter('height'))
+
+        box1.add_widget(self.lbl)
+        box1.add_widget(self.txt_input_ip)
+        box1.add_widget(btn_connect)
+        box1.add_widget(btn_back)
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box1)
+        return anchor
+
+    def go_to_send(self, instance):
+        ip_text = str(self.txt_input_ip.text)
+        if ip_text.count('.') != 3 or len(ip_text) < 10:
+            self.lbl.text = "Error"
+            self.lbl.color = (1,0,0,1)
+        else:
+            self.lbl.text = "IP Address"
+            self.lbl.color = (1,1,1,1)
+            ip = ip_text
+            self.stop()
+            SendToDevice(ip).run()
+
+    def go_back(self, instance):
+        self.stop()
+        MyApp().run()
+
+class SendToDevice(App):
+    def __init__(self, ip, **kwargs):
+        self.ip = ip
+        super().__init__(**kwargs)
+
+    def build(self):
+        box2 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
+
+        lbl = Label(text='Your Message', font_size=30)
+        self.txt_input_Message = TextInput(multiline=False, size_hint_y=None, height=50, font_size=30)
+        btn_send = Button(text='Send Message', size_hint_y=None, height=80)
+        btn_back = Button(text='Back', size_hint_y=None, height=80)
+
+        btn_send.bind(on_press=self.send_message)
+        btn_back.bind(on_press=self.go_back)
+
+        box2.bind(minimum_height=box2.setter('height'))
+
+        box2.add_widget(lbl)
+        box2.add_widget(self.txt_input_Message)
+        box2.add_widget(btn_send)
+        box2.add_widget(btn_back)
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box2)
+        return anchor
+
+    def send_message(self, instance):
+        msg = self.txt_input_Message.text
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client.connect(('192.168.0.105', 12345))  # جایگزین کنید با آی‌پی لپ‌تاپ خود
-            send_data = f"{name}|{email}|{password}"
-            client.send(send_data.encode('utf-8'))
+            client.connect((self.ip, 12345))  # پورت دلخواه
+            client.send(msg.encode('utf-8'))
             response = client.recv(1024).decode('utf-8')
             print("Response from server:", response)
             client.close()
         except Exception as e:
             print("Connection error:", e)
 
-if __name__ == '__main__':
-    MyApp().run()
+    def go_back(self, instance):
+        self.stop()
+        Device().run()
+
+class MyApp(App):
+    def build(self):
+        box = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=20, padding=10)
+        btn_connect = Button(text='Connect To Device', size_hint_y=None, height=80)
+        btn_time_zone_finder = Button(text="Time Zone Finder", size_hint_y=None, height=80)
+        
+        box.add_widget(btn_connect)
+        box.add_widget(btn_time_zone_finder)
+
+        btn_connect.bind(on_press=self.go_next)
+        btn_time_zone_finder.bind(on_press=self.time_zone)
+        box.bind(minimum_height=box.setter('height'))
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box)
+        return anchor
+
+    def go_next(self, instance):
+        self.stop()
+        Device().run()
+
+    def time_zone(self, instance):
+        self.stop()
+        TimeZone().run()
+
+MyApp().run()
