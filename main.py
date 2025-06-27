@@ -6,8 +6,8 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.screenmanager import ScreenManager, Screen
+from pytz import timezone
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from functools import partial
 
 # دیکشنری کشورها و منطقه زمانی
@@ -160,7 +160,7 @@ class TimeZoneScreen(Screen):
             country = self.txt_input_time.text.strip().lower()
             if country in country_timezones:
                 tz_name = country_timezones[country]
-                tz = ZoneInfo(tz_name)
+                tz = timezone(tz_name)
                 now = datetime.now(tz)
                 self.time_lbl.color = (1, 1, 1, 1)
                 self.time_lbl.text = f"Country {country.title()} Time is {now.strftime('%H:%M:%S')}"
