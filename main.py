@@ -156,15 +156,21 @@ class TimeZoneScreen(Screen):
         self.manager.current = screen_name
 
     def finder(self, instance):
-        country = self.txt_input_time.text.lower()
-        if country in country_timezones:
-            tz = ZoneInfo(country_timezones[country])
-            now = datetime.now(tz)
-            self.time_lbl.color = (1, 1, 1, 1)
-            self.time_lbl.text = f"Country {country.title()} Time is {now.strftime('%H:%M:%S')}"
-        else:
-            self.time_lbl.text = "Error"
+        try:
+            country = self.txt_input_time.text.strip().lower()
+            if country in country_timezones:
+                tz_name = country_timezones[country]
+                tz = ZoneInfo(tz_name)
+                now = datetime.now(tz)
+                self.time_lbl.color = (1, 1, 1, 1)
+                self.time_lbl.text = f"Country {country.title()} Time is {now.strftime('%H:%M:%S')}"
+            else:
+                self.time_lbl.text = "Country not found"
+                self.time_lbl.color = (1, 0, 0, 1)
+        except Exception as e:
+            self.time_lbl.text = "Error occurred"
             self.time_lbl.color = (1, 0, 0, 1)
+            print("Error in finder:", e)
 
 
 class MyApp(App):
