@@ -9,7 +9,6 @@ from kivy.uix.screenmanager import ScreenManager, Screen
 from pytz import timezone
 from datetime import datetime
 from functools import partial
-from scapy.all import ARP, Ether, srp
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from threading import Thread
@@ -29,22 +28,6 @@ country_timezones = {
     "uk": "Europe/London"
 }
 
-def scan_network(target_ip):
-    arp = ARP(pdst=target_ip)
-    ether = Ether(dst="ff:ff:ff:ff:ff:ff")
-    packet = ether / arp
-    result = srp(packet, timeout=3, verbose=False)[0]
-
-    devices = []
-    for sent, received in result:
-        ip = received.psrc
-        mac = received.hwsrc
-        try:
-            name = socket.gethostbyaddr(ip)[0]
-        except socket.herror:
-            name = 'Name ?'
-        devices.append((name, ip))
-    return devices
 
 class UserPass(Screen):
     def __init__(self, **kwargs):
