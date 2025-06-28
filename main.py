@@ -84,15 +84,12 @@ class MainScreen(Screen):
 
         btn_connect = Button(text='Connect To Device', size_hint_y=None, height=80)
         btn_time_zone = Button(text="Time Zone Finder", size_hint_y=None, height=80)
-        btn_scan_network = Button(text="Scan Network Devices", size_hint_y=None, height=80)
 
         btn_connect.bind(on_press=partial(self.change_screen, 'device'))
         btn_time_zone.bind(on_press=partial(self.change_screen, 'timezone'))
-        btn_scan_network.bind(on_press=partial(self.change_screen, 'networkscan'))
 
         box.add_widget(btn_connect)
         box.add_widget(btn_time_zone)
-        box.add_widget(btn_scan_network)
 
         anchor = AnchorLayout(anchor_y='top')
         anchor.add_widget(box)
@@ -223,63 +220,7 @@ class TimeZoneScreen(Screen):
             self.time_lbl.color = (1, 0, 0, 1)
             print("Error in finder:", e)
 
-class NetworkScanScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.layout = BoxLayout(orientation='vertical', spacing=10, padding=[10, 10, 10, 10])
-        self.layout.bind(minimum_height=self.layout.setter('height'))
 
-        self.label = Label(text="Enter network IP prefix (e.g. 192.168.1):", size_hint_y=None, height=40)
-        self.text_input = TextInput(text="192.168.1", multiline=False, size_hint_y=None, height=40, font_size=26)
-        self.scan_btn = Button(text="Scan Network", size_hint_y=None, height=50)
-        self.scan_btn.bind(on_press=self.scan_network_devices)
-
-        self.back_btn = Button(text="Back", size_hint_y=None, height=50)
-        self.back_btn.bind(on_press=partial(self.change_screen, 'main'))
-
-        self.scroll = ScrollView(size_hint=(1, 1))
-        self.grid = GridLayout(cols=1, spacing=10, size_hint_y=None)
-        self.grid.bind(minimum_height=self.grid.setter('height'))
-        self.scroll.add_widget(self.grid)
-
-        self.layout.add_widget(self.label)
-        self.layout.add_widget(self.text_input)
-        self.layout.add_widget(self.scan_btn)
-        self.layout.add_widget(self.scroll)
-        self.layout.add_widget(self.back_btn)
-
-        self.add_widget(self.layout)
-
-    def change_screen(self, screen_name, instance):
-        self.manager.current = screen_name
-
-    def scan_network_devices(self, instance):
-        self.grid.clear_widgets()
-        ip_prefix = self.text_input.text.strip()
-        if not ip_prefix:
-            self.grid.add_widget(Label(text="Please enter a valid IP prefix"))
-            return
-
-        target_ip = ip_prefix + "/24"
-        self.grid.add_widget(Label(text=f"Scanning network: {target_ip} ...", size_hint_y=None, height=40))
-
-        # اجرای اسکن در Thread جداگانه
-        Thread(target=self.thread_scan_network, args=(target_ip,)).start()
-
-    def thread_scan_network(self, target_ip):
-        devices = scan_network(target_ip)
-        Clock.schedule_once(lambda dt: self.show_devices(devices))
-
-    def show_devices(self, devices):
-        self.grid.clear_widgets()
-        if devices:
-            height_per_label = 40
-            self.grid.height = height_per_label * len(devices)
-            for i, (name, ip) in enumerate(devices, start=1):
-                self.grid.add_widget(Label(text=f"{i}. {name} - {ip}", size_hint_y=None, height=height_per_label))
-        else:
-            self.grid.height = 40
-            self.grid.add_widget(Label(text="No devices found.", size_hint_y=None, height=40))
 
 class MyApp(App):
     def build(self):
@@ -289,7 +230,6 @@ class MyApp(App):
         sm.add_widget(DeviceScreen(name='device'))
         sm.add_widget(SendToDeviceScreen(name='send'))
         sm.add_widget(TimeZoneScreen(name='timezone'))
-        sm.add_widget(NetworkScanScreen(name='networkscan'))
         return sm
 
 if __name__ == '__main__':
