@@ -9,12 +9,11 @@ from kivy.uix.screenmanager import ScreenManager, Screen
 from pytz import timezone
 from datetime import datetime
 from functools import partial
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.gridlayout import GridLayout
-from threading import Thread
 from kivy.clock import Clock
+from openpyxl import load_workbook, Workbook
+import time
+import os
 
-# دیکشنری کشورها و منطقه زمانی
 country_timezones = {
     "iran": "Asia/Tehran",
     "usa": "America/New_York",
@@ -28,11 +27,17 @@ country_timezones = {
     "uk": "Europe/London"
 }
 
+EXCEL_PATH = "/sdcard/Documents/password.xlsx"
 
 class UserPass(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.password = "hamsam44904490"
+        if os.path.exists(EXCEL_PATH):
+            wb = load_workbook(EXCEL_PATH)
+            ws = wb.active
+            self.password = ws["A1"].value
+        else:
+            self.password = "0000"
 
         box = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
         self.lbl = Label(text='Type Password', font_size=30, size_hint_y=None, height=60)
@@ -67,12 +72,15 @@ class MainScreen(Screen):
 
         btn_connect = Button(text='Connect To Device', size_hint_y=None, height=80)
         btn_time_zone = Button(text="Time Zone Finder", size_hint_y=None, height=80)
+        btn_op = Button(text="Option", size_hint_y=None, height=80)
 
         btn_connect.bind(on_press=partial(self.change_screen, 'device'))
         btn_time_zone.bind(on_press=partial(self.change_screen, 'timezone'))
+        btn_op.bind(on_press=partial(self.change_screen, 'notebook'))
 
         box.add_widget(btn_connect)
         box.add_widget(btn_time_zone)
+        box.add_widget(btn_op)
 
         anchor = AnchorLayout(anchor_y='top')
         anchor.add_widget(box)
@@ -203,7 +211,57 @@ class TimeZoneScreen(Screen):
             self.time_lbl.color = (1, 0, 0, 1)
             print("Error in finder:", e)
 
+class NoteBook(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
+        box5 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
+        box5.bind(minimum_height=box5.setter('height'))
+
+        self.input_password_save = TextInput(hint_text="Password", multiline=False, size_hint_y=None, height=50, font_size=30)
+        self.input_password_save1 = TextInput(hint_text="Password Confirm", multiline=False, size_hint_y=None, height=50, font_size=30)
+        self.btn_save = Button(text='Save Password', size_hint_y=None, height=80)
+
+        self.btn_save.bind(on_press=self.save)
+
+        box5.add_widget(self.input_password_save)
+        box5.add_widget(self.input_password_save1)
+        box5.add_widget(self.btn_save)
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box5)
+        self.add_widget(anchor)
+
+    def save(self, instance):
+        if self.input_password_save.text == self.input_password_save1.text:
+            self.save_to_excel()
+            self.btn_save.text = "Saved"
+            self.btn_save.color = (0, 1, 0, 1)
+            Clock.schedule_once(self.reset_btn, 1.5)
+        else:
+            self.btn_save.text = "Error"
+            self.btn_save.color = (1, 0, 0, 1)
+            Clock.schedule_once(self.reset_btn, 1.5)
+
+    def reset_btn(self, dt):
+        self.btn_save.text = "Save Password"
+        self.btn_save.color = (1, 1, 1, 1)
+
+    def save_to_excel(self):
+        folder = "/sdcard/Documents"
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        password = self.input_password_save.text
+
+        if os.path.exists(EXCEL_PATH):
+            wb = load_workbook(EXCEL_PATH)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+
+        ws["A1"] = password
+        wb.save(EXCEL_PATH)
 
 class MyApp(App):
     def build(self):
@@ -213,6 +271,7 @@ class MyApp(App):
         sm.add_widget(DeviceScreen(name='device'))
         sm.add_widget(SendToDeviceScreen(name='send'))
         sm.add_widget(TimeZoneScreen(name='timezone'))
+        sm.add_widget(NoteBook(name='notebook'))
         return sm
 
 if __name__ == '__main__':
