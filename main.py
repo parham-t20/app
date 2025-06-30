@@ -10,7 +10,10 @@ from pytz import timezone
 from datetime import datetime
 from functools import partial
 from kivy.clock import Clock
+import json
+import os
 
+file_name = "/storage/emulated/0/Download/data.txt"
 
 
 # دیکشنری کشورها و منطقه زمانی
@@ -29,7 +32,16 @@ country_timezones = {
 class UserPass(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.password = "hamsam44904490"
+        
+        if os.path.exists(file_name):
+            with open(file_name, "r", encoding="utf-8") as file:
+                data = file.read()
+                self.password = str(data)
+
+        else:
+            self.password = "0000"
+        
+        
         box = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=24, padding=[10, 30, 10, 10])
         self.input_password = TextInput(hint_text="Enter Password",multiline=False, size_hint_y=None, height=50, font_size=30)
         self.btn_ok = Button(text="Enter", size_hint_y=None, height=80)
@@ -65,12 +77,15 @@ class MainScreen(Screen):
 
         btn_connect = Button(text='Connect To Device', size_hint_y=None, height=80)
         btn_time_zone = Button(text="Time Zone Finder", size_hint_y=None, height=80)
+        btn_option = Button(text="Option", size_hint_y=None, height=80)
 
         btn_connect.bind(on_press=partial(self.change_screen, 'device'))
         btn_time_zone.bind(on_press=partial(self.change_screen, 'timezone'))
+        btn_option.bind(on_press=partial(self.change_screen, 'option'))
 
         box.add_widget(btn_connect)
         box.add_widget(btn_time_zone)
+        box.add_widget(btn_option)
         box.bind(minimum_height=box.setter('height'))
 
         anchor = AnchorLayout(anchor_y='top')
@@ -206,6 +221,84 @@ class TimeZoneScreen(Screen):
             print("Error in finder:", e)
 
 
+
+class ChengePassword(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        box5 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
+
+        box5.bind(minimum_height=box5.setter('height'))
+
+        self.input_pass = TextInput(hint_text="Password",multiline=False, size_hint_y=None, height=50, font_size=30)
+        self.input_pass2 = TextInput(hint_text="Confirm Password",multiline=False, size_hint_y=None, height=50, font_size=30)
+        btn_save = Button(text='Password Save', size_hint_y=None, height=80)
+        btn_back = Button(text='Back', size_hint_y=None, height=80)
+
+        btn_back.bind(on_press=partial(self.change_screen, 'option'))
+        btn_save.bind(on_press=self.save_password)
+
+        box5.add_widget(self.input_pass)
+        box5.add_widget(self.input_pass2)
+        box5.add_widget(btn_save)
+        box5.add_widget(btn_back)
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box5)
+        self.add_widget(anchor)
+
+
+    def change_screen(self, screen_name, instance):
+        self.manager.current = screen_name
+
+
+    def save_password(self, instance):
+        if self.input_pass.text == self.input_pass2.text:
+            
+            if os.path.exists(file_name):
+                with open(file_name, "w", encoding="utf-8") as file:
+                    file.write(self.input_pass.text)
+                    file.close()
+                    partial(self.change_screen, 'main')
+
+            else:
+                with open(file_name, "w", encoding="utf-8") as file:
+                    file.write(self.input_pass.text)
+                    file.close()
+                    partial(self.change_screen, 'main')
+
+        else:
+            self.input_pass2.text = ""
+
+
+class Option(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        box5 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
+
+        box5.bind(minimum_height=box5.setter('height'))
+
+        self.btn_chenge = Button(text='Chenge Password', size_hint_y=None, height=80)
+        self.btn_back = Button(text='Back', size_hint_y=None, height=80)
+
+        self.btn_chenge.bind(on_press=partial(self.change_screen, 'chengepassword'))
+        self.btn_back.bind(on_press=partial(self.change_screen, 'main'))
+        
+
+        box5.add_widget(self.btn_chenge)
+        box5.add_widget(self.btn_back)
+
+        anchor = AnchorLayout(anchor_y='top')
+        anchor.add_widget(box5)
+        self.add_widget(anchor)
+
+    def change_screen(self, screen_name, instance):
+        self.manager.current = screen_name
+
+
+
+
 class MyApp(App):
     def build(self):
         sm = ScreenManager()
@@ -214,6 +307,8 @@ class MyApp(App):
         sm.add_widget(DeviceScreen(name='device'))
         sm.add_widget(SendToDeviceScreen(name='send'))
         sm.add_widget(TimeZoneScreen(name='timezone'))
+        sm.add_widget(Option(name='option'))
+        sm.add_widget(ChengePassword(name='chengepassword'))
         return sm
 
 
