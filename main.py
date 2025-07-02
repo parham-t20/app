@@ -1,5 +1,3 @@
-
-
 import socket
 from kivy.app import App
 from kivy.uix.label import Label
@@ -13,19 +11,11 @@ from pytz import timezone
 from datetime import datetime
 from functools import partial
 from kivy.clock import Clock
+import json
 import os
 
-from kivy.utils import platform
-
-if platform == "android":
-    from android.storage import app_storage_path
-    from jnius import autoclass
-    Context = autoclass('org.kivy.android.PythonActivity').mActivity
-    file_dir = app_storage_path(Context)
-    file_name = os.path.join(file_dir, "data.txt")
-else:
-    file_name = "data.txt"
-
+file_name = "/storage/emulated/0/Download/data.txt"
+#file_name = "data.txt"
 
 # دیکشنری کشورها و منطقه زمانی
 country_timezones = {
@@ -34,15 +24,6 @@ country_timezones = {
     "germany": "Europe/Berlin",
     "alman": "Europe/Berlin",
     "russia": "Europe/Moscow",
-    "france": "Europe/Paris",
-    "canada": "America/Toronto",
-    "india": "Asia/Kolkata",
-    "japan": "Asia/Tokyo",
-    "china": "Asia/Shanghai",
-    "south korea": "Asia/Seoul",
-    "southkorea": "Asia/Seoul",
-    "australia": "Australia/Sydney",
-    "southafrica": "Africa/Johannesburg",
     "uae": "Asia/Dubai",
     "dubai": "Asia/Dubai",
     "brazil": "America/Sao_Paulo",
@@ -266,7 +247,7 @@ class ChengePassword(Screen):
 
         box5 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
 
-        box5.bind(minimum_height=box5.setter('height'))
+        # box5.bind(minimum_height=box5.setter('height'))
 
         self.input_pass = TextInput(hint_text="Password , Len == 8",multiline=False, size_hint_y=None, height=50, font_size=30, input_filter='int')
         self.input_pass2 = TextInput(hint_text="Confirm Password, Len == 8",multiline=False, size_hint_y=None, height=50, font_size=30, input_filter='int')
