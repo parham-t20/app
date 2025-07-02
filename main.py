@@ -1,3 +1,5 @@
+
+
 import socket
 from kivy.app import App
 from kivy.uix.label import Label
@@ -11,10 +13,18 @@ from pytz import timezone
 from datetime import datetime
 from functools import partial
 from kivy.clock import Clock
-import json
 import os
 
-file_name = "/storage/emulated/0/Download/data.txt"
+from kivy.utils import platform
+
+if platform == "android":
+    from android.storage import app_storage_path
+    from jnius import autoclass
+    Context = autoclass('org.kivy.android.PythonActivity').mActivity
+    file_dir = app_storage_path(Context)
+    file_name = os.path.join(file_dir, "data.txt")
+else:
+    file_name = "data.txt"
 
 
 # دیکشنری کشورها و منطقه زمانی
@@ -24,6 +34,15 @@ country_timezones = {
     "germany": "Europe/Berlin",
     "alman": "Europe/Berlin",
     "russia": "Europe/Moscow",
+    "france": "Europe/Paris",
+    "canada": "America/Toronto",
+    "india": "Asia/Kolkata",
+    "japan": "Asia/Tokyo",
+    "china": "Asia/Shanghai",
+    "south korea": "Asia/Seoul",
+    "southkorea": "Asia/Seoul",
+    "australia": "Australia/Sydney",
+    "southafrica": "Africa/Johannesburg",
     "uae": "Asia/Dubai",
     "dubai": "Asia/Dubai",
     "brazil": "America/Sao_Paulo",
