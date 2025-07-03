@@ -6,16 +6,14 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.screenmanager import ScreenManager, Screen
-from kivy.uix.gridlayout import GridLayout
 from pytz import timezone
 from datetime import datetime
 from functools import partial
 from kivy.clock import Clock
-import json
 import os
 
 file_name = "/storage/emulated/0/Download/data.txt"
-#file_name = "data.txt"
+
 
 # دیکشنری کشورها و منطقه زمانی
 country_timezones = {
@@ -33,58 +31,40 @@ country_timezones = {
 class UserPass(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        
         if os.path.exists(file_name):
             with open(file_name, "r", encoding="utf-8") as file:
-                self.password = str(file.read())
+                data = file.read()
+                self.password = str(data)
         else:
             self.password = "0000"
+        
+        box = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=24, padding=[10, 30, 10, 10])
+        self.input_password = TextInput(hint_text="Enter Password", multiline=False, size_hint_y=None, height=80, font_size=58)
+        self.btn_ok = Button(text="Enter", size_hint_y=None, height=80)
+        self.btn_ok.color = (1, 1, 1, 1)
 
-        self.input_text = ""
+        box.add_widget(self.input_password)
+        box.add_widget(self.btn_ok)
 
-        box = BoxLayout(orientation='vertical', spacing=20, padding=10)
-        self.label = Label(text="Enter Password", font_size=30, size_hint_y=None, height=80)
-        self.grid = GridLayout(cols=3, spacing=10, padding=10)
-
-        for digit in range(1, 10):
-            self.grid.add_widget(self.make_button(str(digit)))
-        self.grid.add_widget(self.make_button("C"))
-        self.grid.add_widget(self.make_button("0"))
-        self.grid.add_widget(self.make_button("E"))
-
-        box.add_widget(self.label)
-        box.add_widget(self.grid)
+        box.bind(minimum_height=box.setter('height'))
+        self.btn_ok.bind(on_press=partial(self.change_screen, 'main'))
 
         anchor = AnchorLayout(anchor_y='center')
         anchor.add_widget(box)
         self.add_widget(anchor)
 
-    def make_button(self, text):
-        btn = Button(text=text, font_size=32)
-        btn.bind(on_press=self.button_pressed)
-        return btn
-
-    def button_pressed(self, instance):
-        value = instance.text
-        if value == "C":
-            self.input_text = ""
-            self.label.text = "Enter Password"
-            self.label.color = (1, 1, 1, 1)
-        elif value == "E":
-            if self.input_text == self.password:
-                self.label.text = "Access Granted"
-                self.label.color = (0, 1, 0, 1)
-                Clock.schedule_once(lambda dt: self.change_screen('main'), 0.5)
-            else:
-                self.label.text = "Wrong Password"
-                self.label.color = (1, 0, 0, 1)
-            self.input_text = ""
+    def change_screen(self, screen_name, instance):
+        if self.input_password.text == self.password:
+            self.btn_ok.color = (0, 1, 0, 1)
+            Clock.schedule_once(lambda dt: self.go_to_main(screen_name), 0.7)  # تاخیر ۱ ثانیه‌ای
         else:
-            self.input_text += value
-            self.label.text = "*" * len(self.input_text)
-            self.label.color = (1, 1, 1, 1)
+            self.input_password.text = ""
+            self.btn_ok.color = (1, 0, 0, 1)
 
-    def change_screen(self, screen_name):
+    def go_to_main(self, screen_name):
         self.manager.current = screen_name
+        self.input_password.text = ""
 
 
 
@@ -247,21 +227,22 @@ class ChengePassword(Screen):
 
         box5 = BoxLayout(orientation='vertical', size_hint=(1, None), spacing=22, padding=[10, 30, 10, 10])
 
-        # box5.bind(minimum_height=box5.setter('height'))
+        box5.bind(minimum_height=box5.setter('height'))
 
-        self.input_pass = TextInput(hint_text="Password , Len == 8",multiline=False, size_hint_y=None, height=50, font_size=30, input_filter='int')
-        self.input_pass2 = TextInput(hint_text="Confirm Password, Len == 8",multiline=False, size_hint_y=None, height=50, font_size=30, input_filter='int')
+        self.input_pass = TextInput(hint_text="Password",multiline=False, size_hint_y=None, height=50, font_size=30)
+        self.input_pass2 = TextInput(hint_text="Confirm Password",multiline=False, size_hint_y=None, height=50, font_size=30)
         self.btn_save = Button(text='Password Save', size_hint_y=None, height=80)
-        btn_back = Button(text='Back', size_hint_y=None, height=80)
+        self.btn_back = Button(text='Back', size_hint_y=None, height=80)
 
         
         self.btn_save.bind(on_press=self.save_password)
-        btn_back.bind(on_press=partial(self.change_screen, 'option'))
+        self.btn_back.bind(on_press=partial(self.change_screen, 'option'))
+
 
         box5.add_widget(self.input_pass)
         box5.add_widget(self.input_pass2)
         box5.add_widget(self.btn_save)
-        box5.add_widget(btn_back)
+        box5.add_widget(self.btn_back)
 
         anchor = AnchorLayout(anchor_y='top')
         anchor.add_widget(box5)
@@ -270,48 +251,35 @@ class ChengePassword(Screen):
 
     def change_screen(self, screen_name, instance):
         self.manager.current = screen_name
+        self.input_pass.text = ""
+        self.input_pass2.text = ""
 
 
     def save_password(self, instance):
-        if self.input_pass.text == self.input_pass2.text:
+        if len(self.input_pass.text) >= 8 and len(self.input_pass2.text) >= 8:
 
             self.btn_save.color = (0,1,0,1)
 
-            if len(self.input_pass.text) == 8 and len(self.input_pass2.text) == 8:
-
-                if os.path.exists(file_name):
-                    with open(file_name, "w", encoding="utf-8") as file:
-                        file.write(self.input_pass.text)
-                        file.close()
-                        self.change_screen('option', instance)
-
-                else:
-                    with open(file_name, "w", encoding="utf-8") as file:
-                        file.write(self.input_pass.text)
-                        file.close()
-                        self.change_screen('option', instance)
+            if os.path.exists(file_name):
+                with open(file_name, "w", encoding="utf-8") as file:
+                    file.write(self.input_pass.text)
+                    file.close()
+                    Clock.schedule_once(lambda dt: self.change_screen('option', instance), 0.7)
+                    
 
             else:
-                self.input_pass.text = ""
-                self.input_pass2.text = ""
-                self.btn_save.color = (1,0,0,1)
-                self.input_pass.hint_text = "Password must be 8 characters"
-                self.input_pass2.hint_text = "Confirm Password must be 8 characters"
-                Clock.schedule_once(lambda dt: self.btn_reset(), 0.8)
-                
+                with open(file_name, "w", encoding="utf-8") as file:
+                    file.write(self.input_pass.text)
+                    file.close()
+                    Clock.schedule_once(lambda dt: self.change_screen('option', instance), .07)
 
         else:
             self.input_pass2.text = ""
             self.btn_save.color = (1,0,0,1)
+            Clock.schedule_once(lambda dt: self.change_btn(), 1)
 
-    def btn_reset(self):
-        self.btn_save.color = (1, 1, 1, 1)
-        Clock.schedule_once(lambda dt: self.lbl_reset(), 1.2)
-
-    def lbl_reset(self):
-        self.input_pass.hint_text = "Password, Len == 8"
-        self.input_pass2.hint_text = "Confirm Password, Len == 8"
-
+    def change_btn(self):
+        self.btn_save.color = (1,1,1,1)
 
 
 class Option(Screen):
