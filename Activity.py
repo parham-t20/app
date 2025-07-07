@@ -12,8 +12,8 @@ from kivy.clock import Clock
 import os
 
 
-#file_name = "/storage/emulated/0/Download/data.txt"
-file_name = "data.txt"
+file_name = "/storage/emulated/0/Download/data.txt"
+#file_name = "data.txt"
 
 
 class UserPass(Screen):
