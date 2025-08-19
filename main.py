@@ -8,6 +8,7 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
+from kivy.clock import Clock
 
 SERVER_URL = "https://server-xx0i.onrender.com"  # آدرس سرور خودت
 file_name = "/storage/emulated/0/Download/App_data.txt"
@@ -41,6 +42,20 @@ class MyApp(App):
             self.show_error()
             return Label(text="خطا در ارتباط با سرور")
 
+    def check_server(self):
+        try:
+            response = requests.get(f"{SERVER_URL}/rece")
+            data = response.json()
+
+            if data[api_key] == 1:
+                self.show_ave()
+            else:
+                self.show_error()
+
+        except Exception as e:
+            self.show_error()
+            
+
     def show_error(self):
         box = BoxLayout(orientation="vertical", spacing=10, padding=10)
         box.add_widget(Label(text="App Is Not Avelabel"))
@@ -65,7 +80,6 @@ class MyApp(App):
         popup = Popup(title="App", content=box, size_hint=(0.8, 0.5))
         popup.open()
 
+        Clock.schedule_once(lambda dt: self.check_server(), 1.0)
+
 MyApp().run()
-
-
-
