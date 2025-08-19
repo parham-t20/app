@@ -73,13 +73,15 @@ class ServerScreen(Screen):
 
         except Exception as e:
             # وقتی به سرور وصل نشد (مثل خطای DNS)
-            box2 = BoxLayout(orientation="vertical", spacing=10, padding=10)
-            box2.add_widget(Label(text="plase on network."))
-            popup = Popup(title="network", content=box2, size_hint=(0.8, 0.5))
-            close_btn = Button(text="Close", size_hint=(1, 0.3))
-            close_btn.bind(on_release=App.get_running_app().stop)
-            box2.add_widget(close_btn)
-            popup.open()
+            if response.status_code != 200:
+                box2 = BoxLayout(orientation="vertical", spacing=10, padding=10)
+                box2.add_widget(Label(text="plase on network."))
+                popup = Popup(title="network", content=box2, size_hint=(0.8, 0.5))
+                close_btn = Button(text="Close", size_hint=(1, 0.3))
+                close_btn.bind(on_release=App.get_running_app().stop)
+                box2.add_widget(close_btn)
+                popup.open()
+            
 
 
 
