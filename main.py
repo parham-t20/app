@@ -10,7 +10,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
 
 SERVER_URL = "https://server-xx0i.onrender.com"  # آدرس سرور خودت
-file_name = "/storage/emulated/0/duk/myapp/App_data.txt"
+file_name = "/storage/emulated/0/Download/App_data.txt"
 
 if not os.path.exists(file_name):
     api_key = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(32))
@@ -66,3 +66,4 @@ class MyApp(App):
         popup.open()
 
 MyApp().run()
+
