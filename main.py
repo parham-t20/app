@@ -7,165 +7,65 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.textinput import TextInput
 from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.togglebutton import ToggleButton
 from kivy.clock import Clock
 
 SERVER_URL = "https://server-xx0i.onrender.com"
 file_name = "/storage/emulated/0/Download/App_data.txt"
 
-# تولید یا خواندن API key
-if not os.path.exists(file_name):
-    api_key = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(32))
-    try:
-        requests.post(f"{SERVER_URL}/send", json={"user": api_key, "api": 0})
-    except:
-        pass
-    with open(file_name, "w") as f:
-        f.write(api_key)
-else:
-    with open(file_name, "r") as f:
-        api_key = f.read().strip()
-
-
-class ServerScreen(Screen):
-    def on_enter(self):
-        # نمایش متن وضعیت
-        box = BoxLayout(orientation="vertical", padding=10, spacing=10)
-        self.status_label = Label(text="Checking server...")
-        box.add_widget(self.status_label)
-        self.add_widget(box)
-
-        # هر ۱ ثانیه چک سرور
-        self.event = Clock.schedule_interval(self.check_server, 1)
-
-    def on_leave(self):
-        if hasattr(self, 'event') and self.event:
-            self.event.cancel()
-
-    def check_server(self, dt):
-        try:
-            response = requests.get(f"{SERVER_URL}/rece", timeout=3)
-            if response.status_code == 200:
-                data = response.json()
-                status = data.get(api_key, 0)
-                self.status_label.text = f"Server status: {status}"
-
-                if status == 1:
-                    if self.manager:
-                        self.manager.current = "main"
-                    if self.event:
-                        self.event.cancel()
-                else:
-                    self.show_disabled()
-                    if self.event:
-                        self.event.cancel()
-            else:
-                box1 = BoxLayout(orientation="vertical", spacing=10, padding=10)
-                box1.add_widget(Label(text="server is not on."))
-                popup = Popup(title="Error", content=box1, size_hint=(0.8, 0.5))
-                close_btn = Button(text="Close", size_hint=(1, 0.3))
-                close_btn.bind(on_release=App.get_running_app().stop)
-                box1.add_widget(close_btn)
-                popup.open()
-
-        except Exception as e:
-            # وقتی به سرور وصل نشد (مثل خطای DNS)
-            if response.status_code != 200:
-                box2 = BoxLayout(orientation="vertical", spacing=10, padding=10)
-                box2.add_widget(Label(text="plase on network."))
-                popup = Popup(title="network", content=box2, size_hint=(0.8, 0.5))
-                close_btn = Button(text="Close", size_hint=(1, 0.3))
-                close_btn.bind(on_release=App.get_running_app().stop)
-                box2.add_widget(close_btn)
-                popup.open()
-            
-
-
-
-
-    def show_disabled(self):
-        box = BoxLayout(orientation="vertical", spacing=10, padding=10)
-        box.add_widget(Label(text="Your app has been disabled by the server."))
-        popup = Popup(title="Disabled", content=box, size_hint=(0.8, 0.5))
-        close_btn = Button(text="Close", size_hint=(1, 0.3))
-        close_btn.bind(on_release=App.get_running_app().stop)
-        box.add_widget(close_btn)
-        popup.open()
-
-
-class MainScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        box = BoxLayout(orientation="vertical", spacing=10, padding=10)
-        box.add_widget(Label(text=f'{api_key}'))
-        self.add_widget(box)
-        self.on_enter()
-
-    def on_enter(self):
-
-        # هر ۱ ثانیه چک سرور
-        self.event = Clock.schedule_interval(self.check_server, 6)
-
-    def on_leave(self):
-        if hasattr(self, 'event') and self.event:
-            self.event.cancel()
-
-    def check_server(self, dt):
-        try:
-            response = requests.get(f"{SERVER_URL}/rece", timeout=3)
-            if response.status_code == 200:
-                data = response.json()
-
-                if data[api_key] == 1:
-                    if self.manager:
-                        self.manager.current = "main"
-                    if self.event:
-                        self.event.cancel()
-                else:
-                    self.show_disabled()
-                    if self.event:
-                        self.event.cancel()
-            else:
-                box1 = BoxLayout(orientation="vertical", spacing=10, padding=10)
-                box1.add_widget(Label(text="server is not on."))
-                popup = Popup(title="Error", content=box1, size_hint=(0.8, 0.5))
-                close_btn = Button(text="Close", size_hint=(1, 0.3))
-                close_btn.bind(on_release=App.get_running_app().stop)
-                box1.add_widget(close_btn)
-                popup.open()
-
-        except Exception as e:
-            # وقتی به سرور وصل نشد (مثل خطای DNS)
-            if response.status_code != 200:
-                box2 = BoxLayout(orientation="vertical", spacing=10, padding=10)
-                box2.add_widget(Label(text="plase on network."))
-                popup = Popup(title="network", content=box2, size_hint=(0.8, 0.5))
-                close_btn = Button(text="Close", size_hint=(1, 0.3))
-                close_btn.bind(on_release=App.get_running_app().stop)
-                box2.add_widget(close_btn)
-                popup.open()
-            
-
-
-
-
-    def show_disabled(self):
-        box = BoxLayout(orientation="vertical", spacing=10, padding=10)
-        box.add_widget(Label(text="Your app has been disabled by the server."))
-        popup = Popup(title="Disabled", content=box, size_hint=(0.8, 0.5))
-        close_btn = Button(text="Close", size_hint=(1, 0.3))
-        close_btn.bind(on_release=App.get_running_app().stop)
-        box.add_widget(close_btn)
-        popup.open()
-
-
 class MyApp(App):
     def build(self):
-        sm = ScreenManager()
-        sm.add_widget(ServerScreen(name='server'))
-        sm.add_widget(MainScreen(name='main'))
-        return sm
+        # AnchorLayout که همه چیز رو وسط نگه می‌دارد
+        anchor = AnchorLayout(anchor_x="center", anchor_y="center")
+
+        # BoxLayout عمودی (پهنای کامل بگیره)
+        box = BoxLayout(orientation="vertical", spacing=10, size_hint=(1, None))
+        box.height = 200  # ارتفاع مشخص
+
+        # ویجت‌ها (size_hint_x=1 یعنی تمام عرض رو بگیرند)
+        self.label = Label(text="Type Api key", size_hint_x=1, size_hint_y=None, height=60, font_size=30)
+        self.text_input = TextInput(hint_text="Api key", multiline=False, size_hint_x=1 ,size_hint_y=None,  font_size=40,  halign="center", height=60)
+        btn = Button(text="Enter", size_hint_x=1, size_hint_y=None, height=60 )
+        btn.bind(on_press=self.on_click)
+        # اضافه کردن ویجت‌ها به BoxLayout
+
+        radio_box = BoxLayout(orientation="horizontal", spacing=20, size_hint_y=None, height=50)
+
+        self.radio0 = ToggleButton(text="0", group="radio", state="down")  # مقدار 0
+        self.radio1 = ToggleButton(text="1", group="radio")                # مقدار 1
+
+        radio_box.add_widget(self.radio0)
+        radio_box.add_widget(self.radio1)
 
 
-if __name__ == '__main__':
+        box.add_widget(self.label)
+        box.add_widget(self.text_input)
+        box.add_widget(radio_box)
+        box.add_widget(btn)
+
+        # اضافه کردن BoxLayout به AnchorLayout
+        anchor.add_widget(box)
+
+        return anchor
+    
+    def on_click(self, instance):
+        if self.text_input.text > "":
+            if self.radio0.state == "down":
+                r = requests.post(f"{SERVER_URL}/send", json={"user":self.text_input.text, "api":0})
+                if r.status_code == 200:
+                    self.text_input.text = ""
+                    self.label.text = str(r.status_code)
+            
+            elif self.radio1.state == "down":
+                r = requests.post(f"{SERVER_URL}/send", json={"user":self.text_input.text, "api":1})
+                if r.status_code == 200:
+                    self.text_input.text = ""
+                    self.label.text = str(r.status_code)
+        else:
+            self.label.text = "plase Type your Api key"
+
+if __name__ == "__main__":
     MyApp().run()
