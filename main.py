@@ -38,9 +38,6 @@ class ServerScreen(Screen):
         # هر ۱ ثانیه چک سرور
         self.event = Clock.schedule_interval(self.check_server, 1)
 
-    def on_e(self):
-        self.event = Clock.schedule_interval(self.check_server, 10)
-
     def on_leave(self):
         if hasattr(self, 'event') and self.event:
             self.event.cancel()
@@ -102,8 +99,64 @@ class MainScreen(Screen):
         box = BoxLayout(orientation="vertical", spacing=10, padding=10)
         box.add_widget(Label(text=f'{api_key}'))
         self.add_widget(box)
-        self.po = ServerScreen()
-        self.po.on_e()
+        self.on_enter()
+
+    def on_enter(self):
+
+        # هر ۱ ثانیه چک سرور
+        self.event = Clock.schedule_interval(self.check_server, 6)
+
+    def on_leave(self):
+        if hasattr(self, 'event') and self.event:
+            self.event.cancel()
+
+    def check_server(self, dt):
+        try:
+            response = requests.get(f"{SERVER_URL}/rece", timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+
+                if data[api_key] == 1:
+                    if self.manager:
+                        self.manager.current = "main"
+                    if self.event:
+                        self.event.cancel()
+                else:
+                    self.show_disabled()
+                    if self.event:
+                        self.event.cancel()
+            else:
+                box1 = BoxLayout(orientation="vertical", spacing=10, padding=10)
+                box1.add_widget(Label(text="server is not on."))
+                popup = Popup(title="Error", content=box1, size_hint=(0.8, 0.5))
+                close_btn = Button(text="Close", size_hint=(1, 0.3))
+                close_btn.bind(on_release=App.get_running_app().stop)
+                box1.add_widget(close_btn)
+                popup.open()
+
+        except Exception as e:
+            # وقتی به سرور وصل نشد (مثل خطای DNS)
+            if response.status_code != 200:
+                box2 = BoxLayout(orientation="vertical", spacing=10, padding=10)
+                box2.add_widget(Label(text="plase on network."))
+                popup = Popup(title="network", content=box2, size_hint=(0.8, 0.5))
+                close_btn = Button(text="Close", size_hint=(1, 0.3))
+                close_btn.bind(on_release=App.get_running_app().stop)
+                box2.add_widget(close_btn)
+                popup.open()
+            
+
+
+
+
+    def show_disabled(self):
+        box = BoxLayout(orientation="vertical", spacing=10, padding=10)
+        box.add_widget(Label(text="Your app has been disabled by the server."))
+        popup = Popup(title="Disabled", content=box, size_hint=(0.8, 0.5))
+        close_btn = Button(text="Close", size_hint=(1, 0.3))
+        close_btn.bind(on_release=App.get_running_app().stop)
+        box.add_widget(close_btn)
+        popup.open()
 
 
 class MyApp(App):
