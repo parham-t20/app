@@ -14,7 +14,7 @@ from kivy.uix.togglebutton import ToggleButton
 from kivy.clock import Clock
 
 SERVER_URL = "https://server-xx0i.onrender.com"
-file_name = "/storage/emulated/0/Download/App_data.txt"
+file_name = "/storage/emulated/0/Download/App_resive.txt"
 
 class MyApp(App):
     def build(self):
@@ -29,7 +29,9 @@ class MyApp(App):
         self.label = Label(text="Type Api key", size_hint_x=1, size_hint_y=None, height=60, font_size=30)
         self.text_input = TextInput(hint_text="Api key", multiline=False, size_hint_x=1 ,size_hint_y=None,  font_size=40,  halign="center", height=60)
         btn = Button(text="Enter", size_hint_x=1, size_hint_y=None, height=60 )
+        btn2 = Button(text="Resive", size_hint_x=1, size_hint_y=None, height=60 )
         btn.bind(on_press=self.on_click)
+        btn2.bind(on_press=self.on_resive)
         # اضافه کردن ویجت‌ها به BoxLayout
 
         radio_box = BoxLayout(orientation="horizontal", spacing=20, size_hint_y=None, height=50)
@@ -45,6 +47,7 @@ class MyApp(App):
         box.add_widget(self.text_input)
         box.add_widget(radio_box)
         box.add_widget(btn)
+        box.add_widget(btn2)
 
         # اضافه کردن BoxLayout به AnchorLayout
         anchor.add_widget(box)
@@ -66,6 +69,16 @@ class MyApp(App):
                     self.label.text = str(r.status_code)
         else:
             self.label.text = "plase Type your Api key"
+
+    def on_resive(self, instance):
+       r = requests.get(f"{SERVER_URL}/rece")
+       data = r.json()
+       data = str(data)
+       data_str = "\n".join(data.split(","))
+       with open (file_name, "w") as f:
+           f.write(data_str)
+           f.close()
+           
 
 if __name__ == "__main__":
     MyApp().run()
