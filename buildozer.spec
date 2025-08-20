@@ -1,7 +1,7 @@
 [app]
 
 # (str) Title of your application
-title = My App
+title = SendApi
 
 # (str) Package name
 package.name = myapp
