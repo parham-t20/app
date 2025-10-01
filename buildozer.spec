@@ -44,7 +44,7 @@ requirements = python3,kivy,pytz
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-presplash.filename = wifi.png
+presplash.filename = %(source.dir)s/data/splash.png
 
 # (str) Icon of the application
 icon.filename = wifi.png
