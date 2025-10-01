@@ -1,5 +1,6 @@
 import kivy
 kivy.require("2.0.0")
+
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -175,8 +176,8 @@ class MainLayout(BoxLayout):
             halign="center",
             size_hint=(1, None),  # ارتفاع ثابت,        # اندازه مناسب برای یک فیلد تک‌خطی
             multiline=False,
-            height=40,
-            font_size = 22    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
+            height=60,
+            font_size = 42    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
         )
 
         self.result = TextInput(
@@ -186,7 +187,7 @@ class MainLayout(BoxLayout):
             readonly=True,        # <-- فقط خواندنی
             cursor_blink=False,
             halign="center",
-            font_size = 20    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
+            font_size = 40    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
         )
         self.add_widget(self.ip_address)
         self.add_widget(self.result)
@@ -200,8 +201,8 @@ class MainLayout(BoxLayout):
             size_hint=(1, None),  # ارتفاع ثابت,        # اندازه مناسب برای یک فیلد تک‌خطی
             multiline=False,
             halign="center",
-            height=40,
-            font_size=20
+            height=60,
+            font_size=42
         )
         self.add_widget(self.port_input)
 
@@ -268,4 +269,3 @@ class WifiScannerApp(App):
 
 if __name__ == "__main__":
     WifiScannerApp().run()
-
