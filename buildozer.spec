@@ -44,10 +44,10 @@ requirements = python3,kivy,pytz
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-presplash.filename = wifiscanner.png
+presplash.filename = wifi.png
 
 # (str) Icon of the application
-icon.filename = wifiscanner.png
+icon.filename = wifi.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
