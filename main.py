@@ -14,8 +14,6 @@ import socket, ipaddress, platform, subprocess, concurrent.futures
 # کلاس Wifi هم همون رو بیار
 
 
-
-
 class LanScanner:
     def __init__(self, timeout=0.5, ping_timeout=1):
         """
@@ -155,35 +153,7 @@ class LanScanner:
 
 class Wifi:
     __All__ = None
-    def scanipaddress(self, end_range=1024, ip_address=None):
-        global local_ip
-        scanner = LanScanner(timeout=0.4, ping_timeout=1)
-        if ip_address == None:
-            local_ip = scanner.get_local_ip()
-            Wifi.__All__ = True
-        else:
-            local_ip = ip_address
-            Wifi.__All__ = False
-        print("Local IP:", local_ip)
-
-        # تولید CIDR از IP
-        parts = local_ip.split('.')
-        cidr = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24" if len(parts) == 4 else None
-
-        all_ports = list(range(1, end_range + 1))
-        print(f"Scanning network {cidr} on ports 1-{end_range}...")
-
-        res = scanner.scan_network(cidr=cidr, ports=all_ports)
-
         # نمایش خروجی
-        for ip, info in sorted(res.items()):
-            if info['alive'] or info['open_ports']:
-                if Wifi.__All__ == False and ip == local_ip:
-                    print(f"{ip} | Alive: {info['alive']} | Open Ports: {info['open_ports']}")
-                
-                elif Wifi.__All__ == True and ip_address == None:
-                    print(f"{ip} | Alive: {info['alive']} | Open Ports: {info['open_ports']}")
-
     def getnamebyip(self, *ip_address:str):
             global name
             try:
@@ -197,10 +167,18 @@ class Wifi:
                 return name
                 
 
-
 class MainLayout(BoxLayout):
     def __init__(self, **kwargs):
         super(MainLayout, self).__init__(orientation="vertical", **kwargs)
+
+        self.ip_address = TextInput(
+            hint_text="Enter Any IP Address",
+            halign="center",
+            size_hint=(1, None),  # ارتفاع ثابت,        # اندازه مناسب برای یک فیلد تک‌خطی
+            multiline=False,
+            height=40,
+            font_size = 22    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
+        )
 
         self.result = TextInput(
             hint_text="Results will appear here...",
@@ -211,6 +189,7 @@ class MainLayout(BoxLayout):
             halign="center",
             font_size = 20    # غیر فعال کردن چشمک‌زدن مکان‌نما (زیبایی)
         )
+        self.add_widget(self.ip_address)
         self.add_widget(self.result)
 
         self.scan_button = Button(text="Scan Network", size_hint=(1, 0.1))
@@ -222,24 +201,34 @@ class MainLayout(BoxLayout):
             size_hint=(1, None),  # ارتفاع ثابت,        # اندازه مناسب برای یک فیلد تک‌خطی
             multiline=False,
             halign="center",
-            height=80,
-            font_size=60
+            height=40,
+            font_size=20
         )
         self.add_widget(self.port_input)
 
     def start_scan(self, instance):
         self.scan_button.disabled = True
         self.port_input.disabled = True
+        self.ip_address.disabled = True
         try:
             end_port = int(self.port_input.text) if self.port_input.text.strip() else 1024
         except:
             end_port = 1024
 
-        self.result.halign="center"
-        self.result.text = "Scanning... Please wait.\n"
-        Clock.schedule_once(lambda dt: self.do_scan(end_port), 0.2)
+        any_ip = self.ip_address.text
 
-    def do_scan(self, end_port):
+        if any_ip == "":
+            self.result.halign="center"
+            self.result.text = "Scanning... Please wait.\n"
+            Clock.schedule_once(lambda dt: self.do_scan(end_port, ip_address=None), 0.2)
+            Wifi.__All__ = True
+        else:
+            self.result.halign="center"
+            self.result.text = "Scanning... Please wait.\n"
+            Clock.schedule_once(lambda dt: self.do_scan(end_port, ip_address=any_ip), 0.2)
+            Wifi.__All__ = False
+
+    def do_scan(self, end_port, ip_address=None):
         wifi = Wifi()
         scanner = LanScanner()
         local_ip = scanner.get_local_ip()
@@ -252,11 +241,22 @@ class MainLayout(BoxLayout):
         output = ""
         for ip, info in sorted(res.items()):
             if info['alive'] or info['open_ports']:
-                device_name = wifi.getnamebyip(ip)
-                output += f"Name:{device_name} | {ip} | Alive: {info['alive']} | Ports: {info['open_ports']}\n"
+
+                if Wifi.__All__ == False and ip == self.ip_address.text:
+                    device_name = wifi.getnamebyip(ip)
+                    output += f"Name:{device_name} | {ip} | Alive: {info['alive']} | Ports: {info['open_ports']}\n"
+                
+                elif Wifi.__All__ == True and ip_address == None:
+                    device_name = wifi.getnamebyip(ip)
+                    output += f"Name:{device_name} | {ip} | Alive: {info['alive']} | Ports: {info['open_ports']}\n"
+        
+        
         self.scan_button.disabled = False
         self.port_input.disabled = False
+        self.ip_address.disabled = False
         if not output:
+            self.result.halign = "center"
+            self.result.foreground_color=[1,0,0,1]
             output = "No alive hosts found."
 
         self.result.text = output
