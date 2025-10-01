@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = ScanWifi
+title = WifiScanner
 
 # (str) Package name
-package.name = myapp
+package.name = WifiScanner
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test
