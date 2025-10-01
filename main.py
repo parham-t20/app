@@ -1,6 +1,5 @@
 import kivy
 kivy.require("2.0.0")
-
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -269,3 +268,4 @@ class WifiScannerApp(App):
 
 if __name__ == "__main__":
     WifiScannerApp().run()
+
