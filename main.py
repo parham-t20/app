@@ -3,6 +3,8 @@ from kivy.lang import Builder
 from kivy.properties import NumericProperty, StringProperty, BooleanProperty
 from kivy.storage.jsonstore import JsonStore
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
 
 # --- Android check ---
 ANDROID = False
@@ -48,11 +50,16 @@ KV = '''
             text: "ریست"
             on_release: root.reset_data()
 
-    Button:
-        text: "شبیه‌سازی قدم (+1)"
+    BoxLayout:
         size_hint_y: None
         height: '48dp'
-        on_release: root.simulate_step()
+        spacing: 10
+        Button:
+            text: "شبیه‌سازی قدم (+1)"
+            on_release: root.simulate_step()
+        Button:
+            text: "نمایش سلامت کلی"
+            on_release: root.show_health_popup()
 
     Label:
         text: "هر قدم = +100 سلامت\nاطلاعات در حافظه ذخیره می‌شود."
@@ -73,7 +80,7 @@ class RootWidget(BoxLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # محل ذخیره‌سازی محلی
+        # ذخیره‌سازی محلی
         self.store = JsonStore("health_data.json")
         if self.store.exists("user"):
             data = self.store.get("user")
@@ -82,7 +89,6 @@ class RootWidget(BoxLayout):
         else:
             self._save_data()
 
-        # آماده‌سازی اندروید
         self.sensor_manager = None
         self.step_listener = None
         if ANDROID:
@@ -105,6 +111,12 @@ class RootWidget(BoxLayout):
         self.health_points = 0
         self._save_data()
         self.status_text = "ریست شد."
+
+    def show_health_popup(self):
+        """نمایش تعداد قدم‌ها و سلامت در یک Popup"""
+        content = Label(text=f"تعداد قدم‌ها: {self.step_count}\nسلامت: {self.health_points}", halign='center')
+        popup = Popup(title="سلامت کلی", content=content, size_hint=(0.7, 0.4))
+        popup.open()
 
     # ---------------- Android بخش ----------------
     def _prepare_android(self):
