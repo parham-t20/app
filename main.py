@@ -1,9 +1,7 @@
-# main.py
 from kivy.app import App
 from kivy.lang import Builder
 from kivy.properties import NumericProperty, StringProperty, BooleanProperty
 from kivy.storage.jsonstore import JsonStore
-from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 
 # --- Android check ---
@@ -14,7 +12,6 @@ try:
     ANDROID = True
 except Exception:
     ANDROID = False
-
 
 KV = '''
 <RootWidget>:
@@ -78,8 +75,6 @@ class RootWidget(BoxLayout):
         super().__init__(**kwargs)
         # محل ذخیره‌سازی محلی
         self.store = JsonStore("health_data.json")
-
-        # بارگذاری داده‌های قبلی
         if self.store.exists("user"):
             data = self.store.get("user")
             self.step_count = data.get("steps", 0)
@@ -87,7 +82,7 @@ class RootWidget(BoxLayout):
         else:
             self._save_data()
 
-        # آماده‌سازی برای اندروید
+        # آماده‌سازی اندروید
         self.sensor_manager = None
         self.step_listener = None
         if ANDROID:
@@ -97,14 +92,12 @@ class RootWidget(BoxLayout):
         self.store.put("user", steps=self.step_count, health=self.health_points)
 
     def _add_health(self, steps=1):
-        """افزایش سلامت با هر قدم"""
         self.step_count += steps
-        self.health_points += (steps * 100)
+        self.health_points += steps * 100
         self._save_data()
         self.status_text = f"قدم‌ها: {self.step_count} | سلامت: {self.health_points}"
 
     def simulate_step(self):
-        """شبیه‌سازی برای تست در کامپیوتر"""
         self._add_health(1)
 
     def reset_data(self):
@@ -131,13 +124,13 @@ class RootWidget(BoxLayout):
             self.status_text = "درخواست مجوز..."
             self._request_permissions_and_start()
         else:
-            self.status_text = "در حالت تست (کامپیوتر): فقط شبیه‌سازی در دسترس است."
+            self.status_text = "در حالت تست: فقط شبیه‌سازی در دسترس است."
 
     def stop_listening(self):
         if ANDROID and self.sensor_manager and self.step_listener:
             self.sensor_manager.unregisterListener(self.step_listener)
-            self.status_text = "گوش دادن متوقف شد."
             self.listening = False
+            self.status_text = "گوش دادن متوقف شد."
 
     def _request_permissions_and_start(self):
         def callback(permissions, results):
@@ -183,17 +176,13 @@ class RootWidget(BoxLayout):
             def onAccuracyChanged(inner_self, sensor, accuracy):
                 pass
 
-        # گرفتن سنسور قدم‌شمار
         try:
-            TYPE_STEP_DETECTOR = self.Sensor.TYPE_STEP_DETECTOR
-        except:
-            TYPE_STEP_DETECTOR = 18
-        sensor = self.sensor_manager.getDefaultSensor(TYPE_STEP_DETECTOR)
-        if sensor is None:
-            self.status_text = "سنسور قدم‌شمار موجود نیست."
-            return
+            TYPE_STEP_DETECTOR = getattr(self.Sensor, "TYPE_STEP_DETECTOR", 18)
+            sensor = self.sensor_manager.getDefaultSensor(TYPE_STEP_DETECTOR)
+            if sensor is None:
+                self.status_text = "سنسور قدم‌شمار موجود نیست."
+                return
 
-        try:
             self.step_listener = StepListener(self)
             delay = self.SensorManager.SENSOR_DELAY_NORMAL
             self.sensor_manager.registerListener(self.step_listener, sensor, delay)
@@ -205,7 +194,7 @@ class RootWidget(BoxLayout):
 
 class HealthStepApp(App):
     def build(self):
-        return Builder.load_string(KV)
+        return RootWidget()
 
 
 if __name__ == '__main__':
