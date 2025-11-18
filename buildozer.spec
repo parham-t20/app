@@ -37,7 +37,7 @@ version = 1.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,pytz,pyjnius,android
+requirements = python3,kivy,kivymd,plyer,ffpyplayer
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
@@ -54,7 +54,7 @@ icon.filename = wifi.png
 orientation = portrait
 
 # (list) List of service to declare
-#services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
+services = reminder_service:main.py
 
 #
 # OSX Specific
@@ -95,7 +95,7 @@ fullscreen = 0
 
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
-android.permissions = INTERNET, ACCESS_WIFI_STATE ,ACCESS_NETWORK_STATE, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, ACTIVITY_RECOGNITION, WAKE_LOCK, FOREGROUND_SERVICE
+android.permissions = INTERNET, ACCESS_WIFI_STATE ,ACCESS_NETWORK_STATE, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, ACTIVITY_RECOGNITION, WAKE_LOCK, FOREGROUND_SERVICE, WAKE_LOCK,FOREGROUND_SERVICE,VIBRATE,POST_NOTIFICATIONS
 
 # (list) features (adds uses-feature -tags to manifest)
 #android.features = android.hardware.usb.host
@@ -201,12 +201,12 @@ android.permissions = INTERNET, ACCESS_WIFI_STATE ,ACCESS_NETWORK_STATE, READ_EX
 #android.add_resources =
 
 # (list) Gradle dependencies to add
-#android.gradle_dependencies =
+android.gradle_dependencies = androidx.core:core:1.10.1, androidx.appcompat:appcompat:1.6.1
 
 # (bool) Enable AndroidX support. Enable when 'android.gradle_dependencies'
 # contains an 'androidx' package, or any package from Kotlin source.
 # android.enable_androidx requires android.api >= 28
-#android.enable_androidx = True
+android.enable_androidx = True
 
 # (list) add java compile options
 # this can for example be necessary when importing certain java libraries using the 'android.gradle_dependencies' option
