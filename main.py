@@ -140,7 +140,7 @@ KV = '''
                     height: self.minimum_height
                     spacing: dp(6)
 
-                    # نمایش IP محلی
+                    # نمایش IP محلی + SSID
                     BoxLayout:
                         size_hint_y: None
                         height: dp(32)
@@ -332,13 +332,51 @@ class MainScreen(BoxLayout):
         self.rows = {}
         Clock.schedule_once(self._init_local_ip, 0)
 
+    # ---- گرفتن SSID روی اندروید (در دسکتاپ None برمی‌گردد) ----
+    def get_current_ssid(self):
+        try:
+            from jnius import autoclass
+            from android import mActivity
+        except ImportError:
+            # روی دسکتاپ یا جایی که android/jnius نیست
+            return None
+        except Exception:
+            return None
+
+        try:
+            Context = autoclass('android.content.Context')
+            WifiManager = autoclass('android.net.wifi.WifiManager')
+
+            wifi_service = mActivity.getSystemService(Context.WIFI_SERVICE)
+            if not wifi_service:
+                return None
+
+            info = wifi_service.getConnectionInfo()
+            if not info:
+                return None
+
+            ssid = info.getSSID()
+            if not ssid:
+                return None
+            # معمولاً با " در ابتدا و انتها برمی‌گردد
+            ssid = str(ssid)
+            if ssid.startswith('"') and ssid.endswith('"'):
+                ssid = ssid[1:-1]
+            return ssid
+        except Exception:
+            return None
+
     def _init_local_ip(self, dt):
         try:
             ip = self.scanner.get_local_ip()
             parts = ip.split(".")
             if len(parts) == 4:
                 subnet = ".".join(parts[:3]) + ".0/24"
-                self.local_ip_text = f"Local IP: {ip} | Network: {subnet}"
+                ssid = self.get_current_ssid()
+                if ssid:
+                    self.local_ip_text = f"Local IP: {ip} | Network: {subnet} | WiFi: {ssid}"
+                else:
+                    self.local_ip_text = f"Local IP: {ip} | Network: {subnet}"
             else:
                 self.local_ip_text = f"Local IP: {ip}"
         except Exception:
