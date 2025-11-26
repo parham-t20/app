@@ -1,22 +1,377 @@
-import threading
-import socket
-import subprocess
-import platform
+# lan_scanner_kivy.py
+# Simple LAN scanner with Kivy UI (multi-screen, for desktop/mobile)
+
+import os
+import csv
 import ipaddress
+import socket
+import platform
+import subprocess
+import threading
 import concurrent.futures
 
 from kivy.app import App
 from kivy.lang import Builder
-from kivy.uix.boxlayout import BoxLayout
-from kivy.properties import StringProperty, BooleanProperty, NumericProperty
 from kivy.clock import Clock
-from kivy.metrics import dp
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.uix.label import Label
-from kivy.uix.button import Button
+from kivy.properties import (
+    StringProperty,
+    BooleanProperty,
+    NumericProperty,
+    ObjectProperty,
+)
+
+KV = r'''
+#:import dp kivy.metrics.dp
+
+<ConfigScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        padding: dp(10)
+        spacing: dp(10)
+
+        Label:
+            text: 'LanScanner'
+            font_size: '22sp'
+            size_hint_y: None
+            height: self.texture_size[1] + dp(10)
+
+        ScrollView:
+            do_scroll_x: False
+            do_scroll_y: True
+
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                spacing: dp(8)
+
+                Label:
+                    text: 'Scan mode'
+                    size_hint_y: None
+                    height: self.texture_size[1] + dp(6)
+
+                BoxLayout:
+                    size_hint_y: None
+                    height: dp(36)
+                    spacing: dp(4)
+
+                    ToggleButton:
+                        text: '/24 local'
+                        group: 'mode'
+                        state: 'down' if app.scan_mode == 'local' else 'normal'
+                        on_release: app.scan_mode = 'local'
+                    ToggleButton:
+                        text: 'CIDR'
+                        group: 'mode'
+                        state: 'down' if app.scan_mode == 'cidr' else 'normal'
+                        on_release: app.scan_mode = 'cidr'
+                    ToggleButton:
+                        text: 'IP range'
+                        group: 'mode'
+                        state: 'down' if app.scan_mode == 'range' else 'normal'
+                        on_release: app.scan_mode = 'range'
+
+                GridLayout:
+                    cols: 2
+                    row_default_height: dp(32)
+                    row_force_default: True
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: dp(4)
+
+                    Label:
+                        text: 'CIDR:'
+                    TextInput:
+                        text: app.cidr
+                        multiline: False
+                        on_text: app.cidr = self.text
+
+                    Label:
+                        text: 'IP start:'
+                    TextInput:
+                        text: app.ip_start
+                        multiline: False
+                        on_text: app.ip_start = self.text
+
+                    Label:
+                        text: 'IP end:'
+                    TextInput:
+                        text: app.ip_end
+                        multiline: False
+                        on_text: app.ip_end = self.text
+
+                    Label:
+                        text: 'Ports mode:'
+                    BoxLayout:
+                        spacing: dp(4)
+                        ToggleButton:
+                            text: 'Common'
+                            group: 'ports_mode'
+                            state: 'down' if app.ports_mode == 'common' else 'normal'
+                            on_release: app.ports_mode = 'common'
+                        ToggleButton:
+                            text: '1..N'
+                            group: 'ports_mode'
+                            state: 'down' if app.ports_mode == 'range' else 'normal'
+                            on_release: app.ports_mode = 'range'
+                        ToggleButton:
+                            text: 'Custom'
+                            group: 'ports_mode'
+                            state: 'down' if app.ports_mode == 'custom' else 'normal'
+                            on_release: app.ports_mode = 'custom'
+
+                    Label:
+                        text: 'N (for 1..N):'
+                    TextInput:
+                        text: app.end_port
+                        multiline: False
+                        input_filter: 'int'
+                        on_text: app.end_port = self.text
+
+                    Label:
+                        text: 'Custom ports:'
+                    TextInput:
+                        text: app.custom_ports
+                        multiline: False
+                        on_text: app.custom_ports = self.text
+
+                    Label:
+                        text: 'Host threads:'
+                    TextInput:
+                        text: app.host_workers
+                        multiline: False
+                        input_filter: 'int'
+                        on_text: app.host_workers = self.text
+
+                    Label:
+                        text: 'Port threads:'
+                    TextInput:
+                        text: app.port_workers
+                        multiline: False
+                        input_filter: 'int'
+                        on_text: app.port_workers = self.text
+
+                    Label:
+                        text: 'TCP timeout (s):'
+                    TextInput:
+                        text: app.tcp_timeout
+                        multiline: False
+                        input_filter: 'float'
+                        on_text: app.tcp_timeout = self.text
+
+                    Label:
+                        text: 'Ping timeout (s):'
+                    TextInput:
+                        text: app.ping_timeout
+                        multiline: False
+                        input_filter: 'float'
+                        on_text: app.ping_timeout = self.text
+
+                BoxLayout:
+                    size_hint_y: None
+                    height: dp(32)
+                    spacing: dp(10)
+
+                    BoxLayout:
+                        size_hint_x: 0.5
+                        spacing: dp(4)
+                        Label:
+                            text: 'Ping before port scan'
+                        CheckBox:
+                            active: app.ping_first
+                            on_active: app.ping_first = self.active
+
+                    BoxLayout:
+                        size_hint_x: 0.5
+                        spacing: dp(4)
+                        Label:
+                            text: 'DNS resolve'
+                        CheckBox:
+                            active: app.resolve_dns
+                            on_active: app.resolve_dns = self.active
+
+        BoxLayout:
+            size_hint_y: None
+            height: dp(48)
+            spacing: dp(8)
+
+            Button:
+                text: 'Start scan'
+                on_release: app.start_scan()
+            Button:
+                text: 'Go to results'
+                on_release: app.root.current = 'results'
+
+<ResultsScreen>:
+    results_container: results_container
+    BoxLayout:
+        orientation: 'vertical'
+        padding: dp(8)
+        spacing: dp(6)
+
+        Label:
+            text: app.status_text
+            size_hint_y: None
+            height: self.texture_size[1] + dp(8)
+
+        ProgressBar:
+            max: app.progress_max
+            value: app.progress_value
+            size_hint_y: None
+            height: dp(20)
+
+        BoxLayout:
+            size_hint_y: None
+            height: dp(30)
+            spacing: dp(10)
+
+            BoxLayout:
+                size_hint_x: 0.5
+                spacing: dp(4)
+                Label:
+                    text: 'Only alive'
+                CheckBox:
+                    active: app.only_alive
+                    on_active:
+                        app.only_alive = self.active
+                        app.on_filter_changed()
+
+            BoxLayout:
+                size_hint_x: 0.5
+                spacing: dp(4)
+                Label:
+                    text: 'Only hostname'
+                CheckBox:
+                    active: app.only_hostname
+                    on_active:
+                        app.only_hostname = self.active
+                        app.on_filter_changed()
+
+        BoxLayout:
+            size_hint_y: None
+            height: dp(28)
+            spacing: dp(4)
+            Label:
+                text: 'IP'
+            Label:
+                text: 'Status'
+            Label:
+                text: 'Open ports'
+            Label:
+                text: 'Hostname'
+
+        ScrollView:
+            do_scroll_x: False
+            do_scroll_y: True
+            GridLayout:
+                id: results_container
+                cols: 1
+                size_hint_y: None
+                height: self.minimum_height
+                spacing: dp(2)
+
+        BoxLayout:
+            size_hint_y: None
+            height: dp(48)
+            spacing: dp(8)
+
+            Button:
+                text: 'Back'
+                on_release: app.go_to_config()
+            Button:
+                text: 'Save CSV'
+                on_release: app.save_csv()
+            Button:
+                text: 'Stop scan'
+                on_release: app.stop_scan()
+
+<DetailsScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        padding: dp(10)
+        spacing: dp(6)
+
+        Label:
+            text: 'Device info'
+            font_size: '18sp'
+            size_hint_y: None
+            height: self.texture_size[1] + dp(8)
+
+        GridLayout:
+            cols: 2
+            size_hint_y: None
+            height: self.minimum_height
+            row_default_height: dp(28)
+            row_force_default: True
+            spacing: dp(4)
+
+            Label:
+                text: 'IP:'
+            Label:
+                text: root.ip_text
+
+            Label:
+                text: 'Status:'
+            Label:
+                text: root.status_text
+
+            Label:
+                text: 'Hostname:'
+            Label:
+                text: root.host_text
+
+            Label:
+                text: 'MAC address:'
+            Label:
+                text: root.mac_text
+
+            Label:
+                text: 'Ping:'
+            Label:
+                text: root.ping_text
+
+            Label:
+                text: 'TTL:'
+            Label:
+                text: root.ttl_text
+
+            Label:
+                text: 'OS guess:'
+            Label:
+                text: root.os_text
+
+        Label:
+            text: 'Open ports:'
+            size_hint_y: None
+            height: self.texture_size[1] + dp(4)
+
+        ScrollView:
+            size_hint_y: 0.5
+            do_scroll_x: False
+            do_scroll_y: True
+            Label:
+                text: root.ports_text
+                text_size: self.width, None
+                size_hint_y: None
+                height: self.texture_size[1]
+
+        BoxLayout:
+            size_hint_y: None
+            height: dp(48)
+            spacing: dp(8)
+
+            Button:
+                text: 'Back'
+                on_release: app.root.current = 'results'
+'''
 
 
-# ==================== Scanner logic ====================
+# =============== Scan logic ==================
 
 class LanScanner:
     def __init__(self, timeout=0.5, ping_timeout=1.0):
@@ -34,14 +389,15 @@ class LanScanner:
             s.close()
         return ip
 
-    def _ping_host(self, ip):
+    def _ping_host(self, ip: str) -> bool:
         sys_name = platform.system().lower()
         try:
             if sys_name == "windows":
                 cmd = ["ping", "-n", "1", "-w", str(int(self.ping_timeout * 1000)), ip]
-            else:
-                # Linux / Android / macOS: -c 1, -W <seconds> (on some systems)
+            elif sys_name == "linux":
                 cmd = ["ping", "-c", "1", "-W", str(max(1, int(self.ping_timeout))), ip]
+            else:
+                cmd = ["ping", "-c", "1", ip]
         except Exception:
             cmd = ["ping", "-c", "1", ip]
 
@@ -53,12 +409,10 @@ class LanScanner:
                 timeout=self.ping_timeout + 1.0,
             )
             return proc.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
         except Exception:
             return False
 
-    def _scan_port(self, ip, port):
+    def _scan_port(self, ip: str, port: int) -> bool:
         try:
             with socket.create_connection((ip, port), timeout=self.timeout):
                 return True
@@ -66,387 +420,221 @@ class LanScanner:
             return False
 
 
-# ==================== Kivy UI ====================
+# =============== Screens ==================
 
-KV = '''
-<Row@BoxLayout>:
-    orientation: 'horizontal'
-    size_hint_y: None
-    height: dp(32)
-    spacing: dp(4)
-    ip: ''
-    alive: ''
-    ports: ''
-    host: ''
-    Label:
-        text: root.ip
-        size_hint_x: 0.28
-        text_size: self.size
-        valign: 'middle'
-        halign: 'left'
-    Label:
-        text: root.alive
-        size_hint_x: 0.12
-        text_size: self.size
-        valign: 'middle'
-        halign: 'center'
-    Label:
-        text: root.ports
-        size_hint_x: 0.30
-        text_size: self.size
-        valign: 'middle'
-        halign: 'left'
-    Label:
-        text: root.host
-        size_hint_x: 0.30
-        text_size: self.size
-        valign: 'middle'
-        halign: 'left'
+class ConfigScreen(Screen):
+    pass
 
 
-<MainScreen>:
-    orientation: 'vertical'
-    padding: dp(8)
-    spacing: dp(6)
-
-    # نوار تب‌ها
-    BoxLayout:
-        size_hint_y: None
-        height: dp(40)
-        spacing: dp(6)
-        ToggleButton:
-            text: 'Setting'
-            group: 'tabs'
-            state: 'down'
-            on_state:
-                if self.state == 'down': root.ids.sm.current = 'config'
-        ToggleButton:
-            text: 'Results'
-            group: 'tabs'
-            on_state:
-                if self.state == 'down': root.ids.sm.current = 'results'
-
-    ScreenManager:
-        id: sm
-
-        # صفحه تنظیمات
-        Screen:
-            name: 'config'
-            ScrollView:
-                do_scroll_x: False
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    spacing: dp(6)
-
-                    # نمایش IP محلی + SSID
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(32)
-                        Label:
-                            text: root.local_ip_text
-                            text_size: self.size
-                            halign: 'left'
-                            valign: 'middle'
-
-                    # انتخاب Mode
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        Label:
-                            text: 'Mode:'
-                            size_hint_x: None
-                            width: dp(70)
-                        Spinner:
-                            id: mode_spinner
-                            text: 'Local /24'
-                            values: ['Local /24', 'CIDR', 'Range']
-                            size_hint_x: 1
-                            on_text: root.on_mode_change(self.text)
-
-                    # ورودی CIDR
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        Label:
-                            text: 'CIDR:'
-                            size_hint_x: None
-                            width: dp(70)
-                        TextInput:
-                            id: cidr_input
-                            text: '192.168.1.0/24'
-                            multiline: False
-                            hint_text: '192.168.1.0/24'
-
-                    # Range: Start / End
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        Label:
-                            text: 'Start:'
-                            size_hint_x: None
-                            width: dp(70)
-                        TextInput:
-                            id: start_ip_input
-                            text: '192.168.1.1'
-                            multiline: False
-                            hint_text: '192.168.1.1'
-                        Label:
-                            text: 'End:'
-                            size_hint_x: None
-                            width: dp(60)
-                        TextInput:
-                            id: end_ip_input
-                            text: '192.168.1.254'
-                            multiline: False
-                            hint_text: '192.168.1.254'
-
-                    # Ports
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        Label:
-                            text: 'Ports:'
-                            size_hint_x: None
-                            width: dp(70)
-                        TextInput:
-                            id: ports_input
-                            text: '1-1024'
-                            multiline: False
-                            hint_text: '80,443 or 1000-2000'
-
-                    # Toggle ها ردیف ۱ (Ping و DNS)
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        ToggleButton:
-                            id: ping_toggle
-                            text: 'Ping first: ON' if self.state == 'down' else 'Ping first: OFF'
-                            state: 'down'
-                            size_hint_x: 0.5
-                            on_state:
-                                root.ping_first = (self.state == 'down')
-                                self.text = 'Ping first: ON' if self.state == 'down' else 'Ping first: OFF'
-                        ToggleButton:
-                            id: dns_toggle
-                            text: 'Resolve DNS: ON' if self.state == 'down' else 'Resolve DNS: OFF'
-                            state: 'down'
-                            size_hint_x: 0.5
-                            on_state:
-                                root.resolve_dns = (self.state == 'down')
-                                self.text = 'Resolve DNS: ON' if self.state == 'down' else 'Resolve DNS: OFF'
-
-                    # Toggle hostname filter در ردیف جدا
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(6)
-                        ToggleButton:
-                            id: filter_toggle
-                            text: 'Only with hostname: ON' if self.state == 'down' else 'Only with hostname: OFF'
-                            state: 'down'
-                            size_hint_x: 1
-                            on_state:
-                                root.filter_hostname = (self.state == 'down')
-                                self.text = 'Only with hostname: ON' if self.state == 'down' else 'Only with hostname: OFF'
-                                root.refresh_view()
-
-                    # دکمه‌های Start / Stop / Clear
-                    BoxLayout:
-                        size_hint_y: None
-                        height: dp(40)
-                        spacing: dp(8)
-                        Button:
-                            id: start_btn
-                            text: 'Start scan'
-                            disabled: root.scanning
-                            on_press: root.start_scan()
-                        Button:
-                            id: stop_btn
-                            text: 'Stop'
-                            disabled: not root.scanning
-                            on_press: root.stop_scan()
-                        Button:
-                            text: 'Clear'
-                            on_press: root.clear_results()
-
-        # صفحه نتایج
-        Screen:
-            name: 'results'
-            BoxLayout:
-                orientation: 'vertical'
-                spacing: dp(6)
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: dp(30)
-                    spacing: dp(6)
-                    ProgressBar:
-                        id: progress_bar
-                        max: 1.0
-                        value: root.progress_value
-                    Label:
-                        id: status_label
-                        text: root.status_text
-                        size_hint_x: None
-                        width: dp(220)
-                        text_size: self.size
-                        halign: 'left'
-                        valign: 'middle'
-
-                RecycleView:
-                    id: rv
-                    viewclass: 'Row'
-                    RecycleBoxLayout:
-                        default_size: None, dp(32)
-                        default_size_hint: 1, None
-                        size_hint_y: None
-                        height: self.minimum_height
-                        orientation: 'vertical'
-'''
-
-
-class MainScreen(BoxLayout):
-    status_text = StringProperty("Ready")
-    local_ip_text = StringProperty("Detecting local IP...")
-    progress_value = NumericProperty(0.0)
-    scanning = BooleanProperty(False)
-
-    filter_hostname = BooleanProperty(True)
-    ping_first = BooleanProperty(True)
-    resolve_dns = BooleanProperty(True)
-
-    mode = StringProperty("local")  # "local", "cidr", "range"
+class ResultsScreen(Screen):
+    results_container = ObjectProperty(None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.scanner = LanScanner(timeout=0.4, ping_timeout=1.0)
+        # Keep all buttons by IP (even if currently hidden by filter)
+        self.all_buttons = {}  # ip -> Button
+
+    def clear_results(self):
+        if self.results_container:
+            self.results_container.clear_widgets()
+        self.all_buttons.clear()
+
+    def update_row(self, ip: str, alive: bool, ports_text: str, hostname: str):
+        from kivy.app import App
+        app = App.get_running_app()
+        text = f"{ip} | {'Alive' if alive else 'Dead'} | {ports_text or '-'} | {hostname or '-'}"
+
+        if ip in self.all_buttons:
+            btn = self.all_buttons[ip]
+            btn.text = text
+        else:
+            btn = Button(
+                text=text,
+                size_hint_y=None,
+                height=30,
+                halign='left',
+            )
+            btn.bind(on_release=lambda inst, ip=ip: app.open_details(ip))
+            self.all_buttons[ip] = btn
+
+        # Apply filter for this IP (show/hide)
+        self.apply_filter_for_ip(ip, app)
+
+    def apply_filter_for_ip(self, ip: str, app):
+        btn = self.all_buttons.get(ip)
+        if not btn:
+            return
+        should_show = app.ip_passes_filter(ip)
+        container = self.results_container
+        if should_show:
+            if btn.parent is None:
+                container.add_widget(btn)
+        else:
+            if btn.parent is not None:
+                container.remove_widget(btn)
+
+    def apply_filters_to_all(self, app):
+        for ip in list(self.all_buttons.keys()):
+            self.apply_filter_for_ip(ip, app)
+
+
+class DetailsScreen(Screen):
+    ip_text = StringProperty("")
+    status_text = StringProperty("")
+    host_text = StringProperty("")
+    mac_text = StringProperty("")
+    ping_text = StringProperty("")
+    ttl_text = StringProperty("")
+    os_text = StringProperty("")
+    ports_text = StringProperty("")
+
+    def set_details(
+        self, ip, alive_text, hostname, mac, ping, ttl, os_guess, ports_text
+    ):
+        self.ip_text = ip
+        self.status_text = alive_text
+        self.host_text = hostname
+        self.mac_text = mac
+        self.ping_text = ping
+        self.ttl_text = ttl
+        self.os_text = os_guess
+        self.ports_text = ports_text
+
+
+# =============== Main app ==================
+
+class MainApp(App):
+    COMMON_PORTS = [53, 80, 135, 139, 143, 443, 445, 1883, 3074, 3306, 3389, 3659, 5222, 8080, 5222, 1883, 6379, 27017, 11211, 27015, 25565]
+
+    # Scan settings
+    scan_mode = StringProperty("local")      # local / cidr / range
+    cidr = StringProperty("192.168.0.0/24")
+    ip_start = StringProperty("192.168.0.1")
+    ip_end = StringProperty("192.168.0.245")
+
+    ports_mode = StringProperty("common")    # common / range / custom
+    end_port = StringProperty("1024")
+    custom_ports = StringProperty("53,80,443,110,143,1883,3306,3389,5222,6379,8080")
+
+    ping_first = BooleanProperty(True)
+    resolve_dns = BooleanProperty(True)
+
+    host_workers = StringProperty("200")
+    port_workers = StringProperty("100")
+    tcp_timeout = StringProperty("0.4")
+    ping_timeout = StringProperty("1.0")
+
+    status_text = StringProperty("Ready")
+    progress_value = NumericProperty(0)
+    progress_max = NumericProperty(1)
+
+    # Filters
+    only_alive = BooleanProperty(True)
+    only_hostname = BooleanProperty(True)
+
+    scanning = BooleanProperty(False)
+    selected_ip = StringProperty("")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.scanner = None
         self.stop_event = None
-        # rows: ip -> {"alive": bool, "ports": set(), "hostname": str}
-        self.rows = {}
-        Clock.schedule_once(self._init_local_ip, 0)
+        self.alive_by_ip = {}
+        self.open_ports_by_ip = {}
+        self.hostname_by_ip = {}
 
-    # ---- گرفتن SSID روی اندروید (در دسکتاپ None برمی‌گردد) ----
-    def get_current_ssid(self):
-        try:
-            from jnius import autoclass
-            from android import mActivity
-        except ImportError:
-            # روی دسکتاپ یا جایی که android/jnius نیست
-            return None
-        except Exception:
-            return None
+    def build(self):
+        self.title = "LAN Scanner - Kivy"
+        Builder.load_string(KV)
+        sm = ScreenManager()
+        sm.add_widget(ConfigScreen(name="config"))
+        sm.add_widget(ResultsScreen(name="results"))
+        sm.add_widget(DetailsScreen(name="details"))
+        return sm
 
-        try:
-            Context = autoclass('android.content.Context')
-            WifiManager = autoclass('android.net.wifi.WifiManager')
+    # ---------- Filter helpers ----------
 
-            wifi_service = mActivity.getSystemService(Context.WIFI_SERVICE)
-            if not wifi_service:
-                return None
+    def ip_passes_filter(self, ip: str) -> bool:
+        if self.only_alive and not self.alive_by_ip.get(ip, False):
+            return False
+        if self.only_hostname and not (self.hostname_by_ip.get(ip) or "").strip():
+            return False
+        return True
 
-            info = wifi_service.getConnectionInfo()
-            if not info:
-                return None
+    def on_filter_changed(self):
+        if not self.root:
+            return
+        res = self.root.get_screen("results")
+        res.apply_filters_to_all(self)
 
-            ssid = info.getSSID()
-            if not ssid:
-                return None
-            # معمولاً با " در ابتدا و انتها برمی‌گردد
-            ssid = str(ssid)
-            if ssid.startswith('"') and ssid.endswith('"'):
-                ssid = ssid[1:-1]
-            return ssid
-        except Exception:
-            return None
+    # ---------- Message helpers ----------
 
-    def _init_local_ip(self, dt):
-        try:
-            ip = self.scanner.get_local_ip()
-            parts = ip.split(".")
-            if len(parts) == 4:
-                subnet = ".".join(parts[:3]) + ".0/24"
-                ssid = self.get_current_ssid()
-                if ssid:
-                    self.local_ip_text = f"Local IP: {ip} | Network: {subnet} | WiFi: {ssid}"
-                else:
-                    self.local_ip_text = f"Local IP: {ip} | Network: {subnet}"
-            else:
-                self.local_ip_text = f"Local IP: {ip}"
-        except Exception:
-            self.local_ip_text = "Local IP: unknown"
-
-    # ---------- UI helpers ----------
-
-    def show_error(self, message):
-        box = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        lbl = Label(text=message)
-        btn = Button(text="OK", size_hint_y=None, height=dp(40))
-        box.add_widget(lbl)
-        box.add_widget(btn)
-        popup = Popup(title="Error", content=box, size_hint=(0.9, 0.4))
+    def show_message(self, title, text):
+        content = BoxLayout(orientation="vertical", padding=10, spacing=10)
+        content.add_widget(Label(text=text))
+        btn = Button(text="Close", size_hint_y=None, height=40)
+        content.add_widget(btn)
+        popup = Popup(title=title, content=content, size_hint=(0.8, 0.4))
         btn.bind(on_release=popup.dismiss)
         popup.open()
 
-    def on_mode_change(self, text):
-        if text.startswith("Local"):
-            self.mode = "local"
-        elif text == "CIDR":
-            self.mode = "cidr"
+    def show_error(self, text):
+        self.show_message("Error", text)
+
+    def show_info(self, text):
+        self.show_message("Info", text)
+
+    # ---------- Config reading ----------
+
+    def read_config(self):
+        try:
+            host_workers = max(1, int(self.host_workers))
+            port_workers = max(1, int(self.port_workers))
+        except ValueError:
+            raise ValueError("Thread values must be integers.")
+
+        try:
+            tcp_timeout = float(self.tcp_timeout)
+            ping_timeout = float(self.ping_timeout)
+            if tcp_timeout <= 0 or ping_timeout <= 0:
+                raise ValueError
+        except ValueError:
+            raise ValueError("Timeout values must be positive floats.")
+
+        pmode = self.ports_mode
+        if pmode == "common":
+            ports = list(self.COMMON_PORTS)
+        elif pmode == "range":
+            try:
+                end_n = int(self.end_port)
+                if not (1 <= end_n <= 65535):
+                    raise ValueError
+            except ValueError:
+                raise ValueError("N must be between 1 and 65535.")
+            ports = list(range(1, end_n + 1))
         else:
-            self.mode = "range"
+            ports = self.parse_ports_list(self.custom_ports)
 
-    def _ui(self, func, *args, **kwargs):
-        # Schedule a function to run on the main (UI) thread
-        Clock.schedule_once(lambda dt: func(*args, **kwargs), 0)
-
-    # ---------- Config / targets / ports ----------
-
-    def _build_targets(self):
-        if self.mode == "local":
-            ip = self.scanner.get_local_ip()
-            parts = ip.split(".")
-            if len(parts) != 4:
-                raise ValueError("Invalid local IP address")
-            cidr = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-            net = ipaddress.ip_network(cidr, strict=False)
-            return [str(h) for h in net.hosts()]
-
-        elif self.mode == "cidr":
-            cidr_str = self.ids.cidr_input.text.strip()
-            if not cidr_str:
-                raise ValueError("CIDR is empty")
-            try:
-                net = ipaddress.ip_network(cidr_str, strict=False)
-            except Exception:
-                raise ValueError("Invalid CIDR (example: 192.168.1.0/24)")
-            return [str(h) for h in net.hosts()]
-
-        else:  # range
-            start = self.ids.start_ip_input.text.strip()
-            end = self.ids.end_ip_input.text.strip()
-            if not start or not end:
-                raise ValueError("Start and End IP must not be empty")
-            try:
-                a = int(ipaddress.IPv4Address(start))
-                b = int(ipaddress.IPv4Address(end))
-            except Exception:
-                raise ValueError("Invalid IP range")
-            if a > b:
-                a, b = b, a
-            return [str(ipaddress.IPv4Address(i)) for i in range(a, b + 1)]
+        cfg = {
+            "mode": self.scan_mode,
+            "cidr": self.cidr.strip(),
+            "ip_start": self.ip_start.strip(),
+            "ip_end": self.ip_end.strip(),
+            "ports": ports,
+            "ping_first": bool(self.ping_first),
+            "resolve_dns": bool(self.resolve_dns),
+            "host_workers": host_workers,
+            "port_workers": port_workers,
+            "tcp_timeout": tcp_timeout,
+            "ping_timeout": ping_timeout,
+        }
+        return cfg
 
     @staticmethod
-    def _parse_ports_list(text):
+    def parse_ports_list(text: str):
         text = (text or "").strip()
         if not text:
-            raise ValueError("Ports list is empty")
+            raise ValueError("Port list is empty.")
         result = set()
         for part in text.split(","):
             part = part.strip()
@@ -473,98 +661,204 @@ class MainScreen(BoxLayout):
                 result.add(p)
         return sorted(result)
 
-    # ---------- Public actions ----------
+    def build_targets(self, cfg):
+        mode = cfg["mode"]
+        if mode == "local":
+            local_ip = LanScanner().get_local_ip()
+            parts = local_ip.split(".")
+            if len(parts) != 4:
+                raise ValueError("Invalid local IP.")
+            cidr = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+            net = ipaddress.ip_network(cidr, strict=False)
+            return [str(h) for h in net.hosts()]
+        elif mode == "cidr":
+            try:
+                net = ipaddress.ip_network(cfg["cidr"], strict=False)
+            except Exception:
+                raise ValueError("Invalid CIDR. Example: 192.168.1.0/24")
+            return [str(h) for h in net.hosts()]
+        else:
+            try:
+                a = int(ipaddress.IPv4Address(cfg["ip_start"]))
+                b = int(ipaddress.IPv4Address(cfg["ip_end"]))
+            except Exception:
+                raise ValueError("Invalid IP range.")
+            if a > b:
+                a, b = b, a
+            return [str(ipaddress.IPv4Address(i)) for i in range(a, b + 1)]
+
+    # ---------- Scan control ----------
 
     def start_scan(self):
         if self.scanning:
             return
         try:
-            targets = self._build_targets()
-            ports = self._parse_ports_list(self.ids.ports_input.text)
+            cfg = self.read_config()
         except ValueError as e:
             self.show_error(str(e))
             return
 
-        if not targets:
-            self.show_error("No targets to scan")
-            return
-
         self.clear_results()
-        self.scanning = True
         self.stop_event = threading.Event()
+        self.scanning = True
         self.status_text = "Starting scan..."
-        self.progress_value = 0.0
 
-        th = threading.Thread(
-            target=self._scan_worker,
-            args=(targets, ports, self.ping_first, self.resolve_dns),
-            daemon=True
+        self.scanner = LanScanner(
+            timeout=cfg["tcp_timeout"], ping_timeout=cfg["ping_timeout"]
         )
-        th.start()
+
+        t = threading.Thread(target=self.scan_worker, args=(cfg,), daemon=True)
+        t.start()
+
+        self.root.current = "results"
 
     def stop_scan(self):
-        if not self.scanning:
-            return
-        if self.stop_event:
+        if self.scanning and self.stop_event:
             self.stop_event.set()
             self.status_text = "Stopping..."
 
     def clear_results(self):
-        self.rows.clear()
-        self.ids.rv.data = []
-        self.progress_value = 0.0
+        self.alive_by_ip.clear()
+        self.open_ports_by_ip.clear()
+        self.hostname_by_ip.clear()
+        self.progress_value = 0
+        self.progress_max = 1
         self.status_text = "Ready"
+        res = self.root.get_screen("results")
+        res.clear_results()
 
-    # ---------- Worker thread ----------
+    def ui_call(self, func, *args, **kwargs):
+        def _wrap(dt):
+            func(*args, **kwargs)
 
-    def _scan_worker(self, targets, ports, ping_first, resolve_dns):
+        Clock.schedule_once(_wrap)
+
+    def set_progress_max(self, maxv):
+        self.progress_max = max(1, maxv)
+        self.progress_value = 0
+
+    def update_progress_and_status(self, done, total, stage):
+        self.progress_max = max(1, total)
+        self.progress_value = min(done, total)
+        if stage == "hosts":
+            self.status_text = f"Scanning hosts: {done}/{total}"
+        else:
+            self.status_text = f"Scanning ports: {done}/{total}"
+
+    def finish_scan(self, msg):
+        self.scanning = False
+        self.status_text = msg
+
+    def insert_or_update_ip(self, ip, alive):
+        self.alive_by_ip[ip] = bool(alive)
+        if ip not in self.open_ports_by_ip:
+            self.open_ports_by_ip[ip] = []
+        if ip not in self.hostname_by_ip:
+            self.hostname_by_ip[ip] = ""
+        res = self.root.get_screen("results")
+        res.update_row(ip, bool(alive), self.ports_text(ip), self.hostname_by_ip[ip])
+
+    def update_ports_cell(self, ip, ports_list):
+        self.open_ports_by_ip[ip] = sorted(set(ports_list))
+        had_alive = bool(self.alive_by_ip.get(ip))
+        has_ports = len(self.open_ports_by_ip[ip]) > 0
+        alive_now = had_alive or has_ports
+        self.alive_by_ip[ip] = alive_now
+
+        if ip not in self.hostname_by_ip:
+            self.hostname_by_ip[ip] = ""
+
+        res = self.root.get_screen("results")
+        res.update_row(ip, alive_now, self.ports_text(ip), self.hostname_by_ip[ip])
+
+    def update_host_cell(self, ip, host):
+        self.hostname_by_ip[ip] = host or ""
+        alive = bool(self.alive_by_ip.get(ip))
+        res = self.root.get_screen("results")
+        res.update_row(ip, alive, self.ports_text(ip), self.hostname_by_ip[ip])
+
+    def ports_text(self, ip):
+        ports = self.open_ports_by_ip.get(ip, [])
+        return ", ".join(str(p) for p in ports) if ports else ""
+
+    def resolve_dns_one(self, ip):
         try:
+            host = socket.gethostbyaddr(ip)[0]
+        except Exception:
+            host = ""
+        if not self.stop_event or not self.stop_event.is_set():
+            self.ui_call(self.update_host_cell, ip, host)
+
+    def scan_worker(self, cfg):
+        try:
+            targets = self.build_targets(cfg)
             total_hosts = len(targets)
             if total_hosts == 0:
-                self._ui(self._finish_scan, "No targets")
+                self.ui_call(self.finish_scan, "No targets to scan.")
                 return
 
-            # Ping phase
+            self.ui_call(self.set_progress_max, total_hosts)
+            self.ui_call(
+                lambda: setattr(
+                    self, "status_text", f"Scanning hosts: 0/{total_hosts}"
+                )
+            )
+
             hosts_done = 0
-            if ping_first:
-                self._ui(self._set_status, "Pinging hosts...")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=100) as ex:
-                    future_map = {ex.submit(self.scanner._ping_host, ip): ip for ip in targets}
+
+            if cfg["ping_first"]:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=cfg["host_workers"]
+                ) as ex:
+                    future_map = {
+                        ex.submit(self.scanner._ping_host, ip): ip for ip in targets
+                    }
                     for fut in concurrent.futures.as_completed(future_map):
                         if self.stop_event.is_set():
                             break
                         ip = future_map[fut]
                         alive = bool(fut.result())
-                        self._ui(self._insert_or_update_ip, ip, alive)
+                        self.ui_call(self.insert_or_update_ip, ip, alive)
                         hosts_done += 1
-                        self._ui(self._update_progress, hosts_done, total_hosts)
+                        self.ui_call(
+                            self.update_progress_and_status,
+                            hosts_done,
+                            total_hosts,
+                            "hosts",
+                        )
             else:
-                self._ui(self._set_status, "Marking hosts alive (no ping)...")
                 for i, ip in enumerate(targets, start=1):
                     if self.stop_event.is_set():
                         break
-                    self._ui(self._insert_or_update_ip, ip, True)
-                    hosts_done = i
-                    self._ui(self._update_progress, hosts_done, total_hosts)
+                    self.ui_call(self.insert_or_update_ip, ip, True)
+                    self.ui_call(
+                        self.update_progress_and_status, i, total_hosts, "hosts"
+                    )
 
             if self.stop_event.is_set():
-                self._ui(self._finish_scan, "Stopped")
+                self.ui_call(self.finish_scan, "Stopped.")
                 return
 
-            # Port scan phase
+            ports = cfg["ports"]
             if not ports:
-                self._ui(self._finish_scan, "No ports specified")
+                self.ui_call(self.finish_scan, "Done.")
                 return
 
-            total_port_tasks = len(targets) * len(ports)
+            scan_hosts = list(targets)
+            total_port_tasks = len(scan_hosts) * len(ports)
             if total_port_tasks == 0:
-                self._ui(self._finish_scan, "Done")
+                self.ui_call(self.finish_scan, "Done.")
                 return
 
-            done_tasks = 0
-            self._ui(self._set_status, "Scanning ports...")
+            done_port_tasks = 0
+            self.ui_call(self.set_progress_max, total_port_tasks)
+            self.ui_call(
+                lambda: setattr(
+                    self, "status_text", f"Scanning ports: 0/{total_port_tasks}"
+                )
+            )
 
-            for ip in targets:
+            for ip in scan_hosts:
                 if self.stop_event.is_set():
                     break
 
@@ -575,109 +869,171 @@ class MainScreen(BoxLayout):
                         return None
                     return p if self.scanner._scan_port(ip, p) else None
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=100) as ex:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=cfg["port_workers"]
+                ) as ex:
                     future_map = {ex.submit(check_port, p): p for p in ports}
                     for fut in concurrent.futures.as_completed(future_map):
                         if self.stop_event.is_set():
                             break
-                        res = fut.result()
-                        if isinstance(res, int):
-                            open_ports.append(res)
-                            self._ui(self._update_ports_cell, ip, list(open_ports))
-                        done_tasks += 1
-                        self._ui(self._update_progress, done_tasks, total_port_tasks)
+                        res_port = fut.result()
+                        if isinstance(res_port, int):
+                            open_ports.append(res_port)
+                            self.ui_call(
+                                self.update_ports_cell, ip, list(open_ports)
+                            )
+                        done_port_tasks += 1
+                        self.ui_call(
+                            self.update_progress_and_status,
+                            done_port_tasks,
+                            total_port_tasks,
+                            "ports",
+                        )
 
-                if resolve_dns:
+                if cfg["resolve_dns"]:
                     threading.Thread(
-                        target=self._resolve_dns_one,
-                        args=(ip,),
-                        daemon=True
+                        target=self.resolve_dns_one, args=(ip,), daemon=True
                     ).start()
 
             if self.stop_event.is_set():
-                self._ui(self._finish_scan, "Stopped")
+                self.ui_call(self.finish_scan, "Stopped.")
             else:
-                self._ui(self._finish_scan, "Done")
+                self.ui_call(self.finish_scan, "Done.")
+
         except Exception as e:
-            self._ui(self.show_error, str(e))
-            self._ui(self._finish_scan, "Error")
+            self.ui_call(self.show_error, str(e))
+            self.ui_call(self.finish_scan, "Error")
 
-    def _resolve_dns_one(self, ip):
-        try:
-            host = socket.gethostbyaddr(ip)[0]
-        except Exception:
-            host = ""
-        if self.stop_event and self.stop_event.is_set():
+    # ---------- Navigation / save ----------
+
+    def go_to_config(self):
+        self.root.current = "config"
+
+    def save_csv(self):
+        if not self.alive_by_ip:
+            self.show_info("No results to save.")
             return
-        self._ui(self._update_host_cell, ip, host)
 
-    # ---------- Data model / UI update helpers ----------
+        path = os.path.join(self.user_data_dir, "lan_scan_results.csv")
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["IP", "Alive", "Open Ports", "Hostname"])
+                for ip in sorted(self.alive_by_ip.keys()):
+                    if not self.ip_passes_filter(ip):
+                        continue
+                    alive = "Yes" if self.alive_by_ip.get(ip) else "No"
+                    ports = self.ports_text(ip)
+                    host = self.hostname_by_ip.get(ip, "")
+                    w.writerow([ip, alive, ports, host])
+            self.show_info(f"CSV saved to:\n{path}")
+        except Exception as e:
+            self.show_error(f"Error saving CSV:\n{e}")
 
-    def _set_status(self, text):
-        self.status_text = text
+    # ---------- Details helpers ----------
 
-    def _update_progress(self, done, total):
-        if total <= 0:
-            self.progress_value = 0.0
+    def _get_mac_address(self, ip: str) -> str:
+        try:
+            sys_name = platform.system().lower()
+            if sys_name == "windows":
+                cmd = ["arp", "-a", ip]
+            else:
+                cmd = ["arp", "-n", ip]
+            output = subprocess.check_output(cmd, encoding="utf-8", errors="ignore")
+            import re
+
+            match = re.search(
+                r"([0-9A-Fa-f]{2}[-:]){5}([0-9A-Fa-f]{2})", output
+            )
+            if match:
+                return match.group(0)
+        except Exception:
+            pass
+        return "Unknown"
+
+    def _get_ping_info(self, ip: str):
+        sys_name = platform.system().lower()
+        try:
+            if sys_name == "windows":
+                cmd = ["ping", "-n", "1", "-w", "1000", ip]
+            elif sys_name == "linux":
+                cmd = ["ping", "-c", "1", "-W", "1", ip]
+            else:
+                cmd = ["ping", "-c", "1", ip]
+            output = subprocess.check_output(cmd, encoding="utf-8", errors="ignore")
+        except Exception:
+            return None, None
+
+        import re
+
+        ttl = None
+        time_ms = None
+
+        m_ttl = re.search(r"TTL[=:\s]+(\d+)", output, re.IGNORECASE)
+        if not m_ttl:
+            m_ttl = re.search(r"ttl[=:\s]+(\d+)", output, re.IGNORECASE)
+        if m_ttl:
+            try:
+                ttl = int(m_ttl.group(1))
+            except Exception:
+                ttl = None
+
+        m_time = re.search(r"time[=<]?\s*([\d\.]+)\s*ms", output, re.IGNORECASE)
+        if m_time:
+            try:
+                time_ms = float(m_time.group(1))
+            except Exception:
+                time_ms = None
+
+        return time_ms, ttl
+
+    @staticmethod
+    def _guess_os_from_ttl(ttl):
+        if ttl is None:
+            return "Unknown"
+        if ttl <= 64:
+            return "Probably Linux/Unix"
+        elif ttl <= 128:
+            return "Probably Windows"
+        elif ttl <= 255:
+            return "Probably router/network device"
         else:
-            self.progress_value = float(done) / float(total)
+            return "Unknown"
 
-    def _finish_scan(self, message):
-        self.status_text = message
-        self.scanning = False
+    def open_details(self, ip: str):
+        self.selected_ip = ip
+        alive = bool(self.alive_by_ip.get(ip))
+        ports = self.open_ports_by_ip.get(ip, [])
+        hostname = self.hostname_by_ip.get(ip, "")
 
-    def _insert_or_update_ip(self, ip, alive):
-        row = self.rows.get(ip)
-        if row is None:
-            row = {"alive": bool(alive), "ports": set(), "hostname": ""}
-            self.rows[ip] = row
+        ping_ms, ttl = self._get_ping_info(ip)
+        mac_addr = self._get_mac_address(ip)
+        os_guess = self._guess_os_from_ttl(ttl)
+
+        ports_lines = []
+        if ports:
+            for p in ports:
+                try:
+                    srv = socket.getservbyport(p, "tcp")
+                except Exception:
+                    srv = "-"
+                ports_lines.append(f"{p}  ({srv})")
         else:
-            row["alive"] = bool(alive)
-        self.refresh_view()
+            ports_lines.append("No open ports reported.")
 
-    def _update_ports_cell(self, ip, ports_list):
-        row = self.rows.get(ip)
-        if row is None:
-            row = {"alive": False, "ports": set(), "hostname": ""}
-            self.rows[ip] = row
-        row["ports"] = set(ports_list)
-        # If any open port found, treat host as alive
-        if row["ports"] and not row["alive"]:
-            row["alive"] = True
-        self.refresh_view()
-
-    def _update_host_cell(self, ip, host):
-        row = self.rows.get(ip)
-        if row is None:
-            row = {"alive": False, "ports": set(), "hostname": ""}
-            self.rows[ip] = row
-        row["hostname"] = host or ""
-        self.refresh_view()
-
-    def refresh_view(self):
-        data = []
-        for ip in sorted(self.rows.keys(), key=lambda s: list(map(int, s.split("."))) if s.count(".") == 3 else s):
-            row = self.rows[ip]
-            hostname = row.get("hostname") or ""
-            if self.filter_hostname and not hostname:
-                continue
-            ports = row.get("ports") or set()
-            ports_text = ", ".join(str(p) for p in sorted(ports)) if ports else ""
-            alive_symbol = "✅" if row.get("alive") else "❌"
-            data.append({
-                "ip": ip,
-                "alive": alive_symbol,
-                "ports": ports_text,
-                "host": hostname,
-            })
-        self.ids.rv.data = data
-
-
-class LanScannerApp(App):
-    def build(self):
-        Builder.load_string(KV)
-        return MainScreen()
+        details_screen = self.root.get_screen("details")
+        details_screen.set_details(
+            ip=ip,
+            alive_text="Alive" if alive else "No reply",
+            hostname=hostname or "-",
+            mac=mac_addr,
+            ping=f"{ping_ms:.1f} ms" if ping_ms is not None else "Unknown",
+            ttl=str(ttl) if ttl is not None else "Unknown",
+            os_guess=os_guess,
+            ports_text="\n".join(ports_lines),
+        )
+        self.root.current = "details"
 
 
 if __name__ == "__main__":
-    LanScannerApp().run()
+    MainApp().run()
