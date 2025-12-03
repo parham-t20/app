@@ -1,1039 +1,615 @@
-# lan_scanner_kivy.py
-# Simple LAN scanner with Kivy UI (multi-screen, for desktop/mobile)
-
 import os
-import csv
-import ipaddress
-import socket
-import platform
-import subprocess
+import json
 import threading
-import concurrent.futures
+import time
+import calendar
+from datetime import datetime, timedelta
 
 from kivy.app import App
 from kivy.lang import Builder
-from kivy.clock import Clock
-from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.popup import Popup
-from kivy.uix.label import Label
-from kivy.properties import (
-    StringProperty,
-    BooleanProperty,
-    NumericProperty,
-    ObjectProperty,
-)
+from kivy.clock import Clock
+from kivy.core.audio import SoundLoader
+from kivy.properties import NumericProperty, BooleanProperty, StringProperty
 
-KV = r'''
-#:import dp kivy.metrics.dp
+from plyer import notification
 
-<ConfigScreen>:
+
+KV = """
+<ReminderItem>:
+    orientation: "horizontal"
+    size_hint_y: None
+    height: "60dp"
+    padding: "5dp"
+    spacing: "5dp"
+    canvas.before:
+        Color:
+            rgba: (0.2, 0.2, 0.2, 0.15)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [8, ]
+
+    CheckBox:
+        size_hint_x: None
+        width: "40dp"
+        active: root.enabled
+        on_active: root.on_toggle_active(self.active)
+
+    Label:
+        text: root.summary
+        halign: "left"
+        valign: "middle"
+        text_size: self.size
+
+    Button:
+        text: "Delete"
+        size_hint_x: None
+        width: "70dp"
+        on_release: root.on_delete()
+
+
+<RootWidget>:
+    orientation: "vertical"
+    padding: "10dp"
+    spacing: "10dp"
+
+    # Top form
     BoxLayout:
-        orientation: 'vertical'
-        padding: dp(10)
-        spacing: dp(10)
+        orientation: "vertical"
+        size_hint_y: None
+        height: self.minimum_height
+        spacing: "8dp"
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Reminder message:"
+                size_hint_x: 0.35
+            TextInput:
+                id: message_input
+                multiline: False
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Calendar:"
+                size_hint_x: 0.35
+            Spinner:
+                id: calendar_spinner
+                text: "Gregorian"
+                values: ["Gregorian", "Jalali"]
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Repeat type:"
+                size_hint_x: 0.35
+            Spinner:
+                id: repeat_spinner
+                text: "Once"
+                values: ["Once", "Daily", "Weekly", "Monthly"]
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Year:"
+                size_hint_x: 0.25
+            Spinner:
+                id: year_spinner
+                text: ""
+                values: []
+                size_hint_x: 0.25
+            Label:
+                text: "Month:"
+                size_hint_x: 0.25
+            Spinner:
+                id: month_spinner
+                text: ""
+                values: []
+                size_hint_x: 0.25
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Day:"
+                size_hint_x: 0.25
+            Spinner:
+                id: day_spinner
+                text: ""
+                values: []
+                size_hint_x: 0.25
+            Label:
+                text: "Hour (0-23):"
+                size_hint_x: 0.25
+            TextInput:
+                id: hour_input
+                multiline: False
+                input_filter: "int"
+                size_hint_x: 0.25
+
+        BoxLayout:
+            size_hint_y: None
+            height: "40dp"
+            Label:
+                text: "Minute (0-59):"
+                size_hint_x: 0.35
+            TextInput:
+                id: minute_input
+                multiline: False
+                input_filter: "int"
+                size_hint_x: 0.25
+            Label:
+                text: "Sound path (optional):"
+                size_hint_x: 0.35
+
+        TextInput:
+            id: sound_input
+            multiline: False
+            size_hint_y: None
+            height: "40dp"
+
+        Button:
+            text: "Add reminder"
+            size_hint_y: None
+            height: "50dp"
+            on_release: root.add_reminder()
 
         Label:
-            text: 'LanScanner'
-            font_size: '22sp'
+            id: status_label
             size_hint_y: None
-            height: self.texture_size[1] + dp(10)
+            height: "30dp"
+            text: ""
+            color: (1, 0, 0, 1)
 
-        ScrollView:
-            do_scroll_x: False
-            do_scroll_y: True
+    Label:
+        text: "Reminders:"
+        size_hint_y: None
+        height: "30dp"
 
-            BoxLayout:
-                orientation: 'vertical'
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(8)
-
-                Label:
-                    text: 'Scan mode'
-                    size_hint_y: None
-                    height: self.texture_size[1] + dp(6)
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: dp(36)
-                    spacing: dp(4)
-
-                    ToggleButton:
-                        text: '/24 local'
-                        group: 'mode'
-                        state: 'down' if app.scan_mode == 'local' else 'normal'
-                        on_release: app.scan_mode = 'local'
-                    ToggleButton:
-                        text: 'CIDR'
-                        group: 'mode'
-                        state: 'down' if app.scan_mode == 'cidr' else 'normal'
-                        on_release: app.scan_mode = 'cidr'
-                    ToggleButton:
-                        text: 'IP range'
-                        group: 'mode'
-                        state: 'down' if app.scan_mode == 'range' else 'normal'
-                        on_release: app.scan_mode = 'range'
-
-                GridLayout:
-                    cols: 2
-                    row_default_height: dp(32)
-                    row_force_default: True
-                    size_hint_y: None
-                    height: self.minimum_height
-                    spacing: dp(4)
-
-                    Label:
-                        text: 'CIDR:'
-                    TextInput:
-                        text: app.cidr
-                        multiline: False
-                        on_text: app.cidr = self.text
-
-                    Label:
-                        text: 'IP start:'
-                    TextInput:
-                        text: app.ip_start
-                        multiline: False
-                        on_text: app.ip_start = self.text
-
-                    Label:
-                        text: 'IP end:'
-                    TextInput:
-                        text: app.ip_end
-                        multiline: False
-                        on_text: app.ip_end = self.text
-
-                    Label:
-                        text: 'Ports mode:'
-                    BoxLayout:
-                        spacing: dp(4)
-                        ToggleButton:
-                            text: 'Common'
-                            group: 'ports_mode'
-                            state: 'down' if app.ports_mode == 'common' else 'normal'
-                            on_release: app.ports_mode = 'common'
-                        ToggleButton:
-                            text: '1..N'
-                            group: 'ports_mode'
-                            state: 'down' if app.ports_mode == 'range' else 'normal'
-                            on_release: app.ports_mode = 'range'
-                        ToggleButton:
-                            text: 'Custom'
-                            group: 'ports_mode'
-                            state: 'down' if app.ports_mode == 'custom' else 'normal'
-                            on_release: app.ports_mode = 'custom'
-
-                    Label:
-                        text: 'N (for 1..N):'
-                    TextInput:
-                        text: app.end_port
-                        multiline: False
-                        input_filter: 'int'
-                        on_text: app.end_port = self.text
-
-                    Label:
-                        text: 'Custom ports:'
-                    TextInput:
-                        text: app.custom_ports
-                        multiline: False
-                        on_text: app.custom_ports = self.text
-
-                    Label:
-                        text: 'Host threads:'
-                    TextInput:
-                        text: app.host_workers
-                        multiline: False
-                        input_filter: 'int'
-                        on_text: app.host_workers = self.text
-
-                    Label:
-                        text: 'Port threads:'
-                    TextInput:
-                        text: app.port_workers
-                        multiline: False
-                        input_filter: 'int'
-                        on_text: app.port_workers = self.text
-
-                    Label:
-                        text: 'TCP timeout (s):'
-                    TextInput:
-                        text: app.tcp_timeout
-                        multiline: False
-                        input_filter: 'float'
-                        on_text: app.tcp_timeout = self.text
-
-                    Label:
-                        text: 'Ping timeout (s):'
-                    TextInput:
-                        text: app.ping_timeout
-                        multiline: False
-                        input_filter: 'float'
-                        on_text: app.ping_timeout = self.text
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: dp(32)
-                    spacing: dp(10)
-
-                    BoxLayout:
-                        size_hint_x: 0.5
-                        spacing: dp(4)
-                        Label:
-                            text: 'Ping before port scan'
-                        CheckBox:
-                            active: app.ping_first
-                            on_active: app.ping_first = self.active
-
-                    BoxLayout:
-                        size_hint_x: 0.5
-                        spacing: dp(4)
-                        Label:
-                            text: 'DNS resolve'
-                        CheckBox:
-                            active: app.resolve_dns
-                            on_active: app.resolve_dns = self.active
+    ScrollView:
+        id: reminders_scroll
+        size_hint_y: 1
+        do_scroll_x: False
 
         BoxLayout:
-            size_hint_y: None
-            height: dp(48)
-            spacing: dp(8)
-
-            Button:
-                text: 'Start scan'
-                on_release: app.start_scan()
-            Button:
-                text: 'Go to results'
-                on_release: app.root.current = 'results'
-
-<ResultsScreen>:
-    results_container: results_container
-    BoxLayout:
-        orientation: 'vertical'
-        padding: dp(8)
-        spacing: dp(6)
-
-        Label:
-            text: app.status_text
-            size_hint_y: None
-            height: self.texture_size[1] + dp(8)
-
-        ProgressBar:
-            max: app.progress_max
-            value: app.progress_value
-            size_hint_y: None
-            height: dp(20)
-
-        BoxLayout:
-            size_hint_y: None
-            height: dp(30)
-            spacing: dp(10)
-
-            BoxLayout:
-                size_hint_x: 0.5
-                spacing: dp(4)
-                Label:
-                    text: 'Only alive'
-                CheckBox:
-                    active: app.only_alive
-                    on_active:
-                        app.only_alive = self.active
-                        app.on_filter_changed()
-
-            BoxLayout:
-                size_hint_x: 0.5
-                spacing: dp(4)
-                Label:
-                    text: 'Only hostname'
-                CheckBox:
-                    active: app.only_hostname
-                    on_active:
-                        app.only_hostname = self.active
-                        app.on_filter_changed()
-
-        BoxLayout:
-            size_hint_y: None
-            height: dp(28)
-            spacing: dp(4)
-            Label:
-                text: 'IP'
-            Label:
-                text: 'Status'
-            Label:
-                text: 'Open ports'
-            Label:
-                text: 'Hostname'
-
-        ScrollView:
-            do_scroll_x: False
-            do_scroll_y: True
-            GridLayout:
-                id: results_container
-                cols: 1
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(2)
-
-        BoxLayout:
-            size_hint_y: None
-            height: dp(48)
-            spacing: dp(8)
-
-            Button:
-                text: 'Back'
-                on_release: app.go_to_config()
-            Button:
-                text: 'Save CSV'
-                on_release: app.save_csv()
-            Button:
-                text: 'Stop scan'
-                on_release: app.stop_scan()
-
-<DetailsScreen>:
-    BoxLayout:
-        orientation: 'vertical'
-        padding: dp(10)
-        spacing: dp(6)
-
-        Label:
-            text: 'Device info'
-            font_size: '18sp'
-            size_hint_y: None
-            height: self.texture_size[1] + dp(8)
-
-        GridLayout:
-            cols: 2
+            id: reminders_container
+            orientation: "vertical"
             size_hint_y: None
             height: self.minimum_height
-            row_default_height: dp(28)
-            row_force_default: True
-            spacing: dp(4)
-
-            Label:
-                text: 'IP:'
-            Label:
-                text: root.ip_text
-
-            Label:
-                text: 'Status:'
-            Label:
-                text: root.status_text
-
-            Label:
-                text: 'Hostname:'
-            Label:
-                text: root.host_text
-
-            Label:
-                text: 'MAC address:'
-            Label:
-                text: root.mac_text
-
-            Label:
-                text: 'Ping:'
-            Label:
-                text: root.ping_text
-
-            Label:
-                text: 'TTL:'
-            Label:
-                text: root.ttl_text
-
-            Label:
-                text: 'OS guess:'
-            Label:
-                text: root.os_text
-
-        Label:
-            text: 'Open ports:'
-            size_hint_y: None
-            height: self.texture_size[1] + dp(4)
-
-        ScrollView:
-            size_hint_y: 0.5
-            do_scroll_x: False
-            do_scroll_y: True
-            Label:
-                text: root.ports_text
-                text_size: self.width, None
-                size_hint_y: None
-                height: self.texture_size[1]
-
-        BoxLayout:
-            size_hint_y: None
-            height: dp(48)
-            spacing: dp(8)
-
-            Button:
-                text: 'Back'
-                on_release: app.root.current = 'results'
-'''
+            spacing: "5dp"
+            padding: 0, 0, 0, 10
+"""
 
 
-# =============== Scan logic ==================
+class ReminderItem(BoxLayout):
+    reminder_id = NumericProperty(0)
+    enabled = BooleanProperty(True)
+    summary = StringProperty("")
 
-class LanScanner:
-    def __init__(self, timeout=0.5, ping_timeout=1.0):
-        self.timeout = float(timeout)
-        self.ping_timeout = float(ping_timeout)
-
-    def get_local_ip(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-        except Exception:
-            ip = "127.0.0.1"
-        finally:
-            s.close()
-        return ip
-
-    def _ping_host(self, ip: str) -> bool:
-        sys_name = platform.system().lower()
-        try:
-            if sys_name == "windows":
-                cmd = ["ping", "-n", "1", "-w", str(int(self.ping_timeout * 1000)), ip]
-            elif sys_name == "linux":
-                cmd = ["ping", "-c", "1", "-W", str(max(1, int(self.ping_timeout))), ip]
-            else:
-                cmd = ["ping", "-c", "1", ip]
-        except Exception:
-            cmd = ["ping", "-c", "1", ip]
-
-        try:
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=self.ping_timeout + 1.0,
-            )
-            return proc.returncode == 0
-        except Exception:
-            return False
-
-    def _scan_port(self, ip: str, port: int) -> bool:
-        try:
-            with socket.create_connection((ip, port), timeout=self.timeout):
-                return True
-        except Exception:
-            return False
-
-
-# =============== Screens ==================
-
-class ConfigScreen(Screen):
-    pass
-
-
-class ResultsScreen(Screen):
-    results_container = ObjectProperty(None)
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Keep all buttons by IP (even if currently hidden by filter)
-        self.all_buttons = {}  # ip -> Button
-
-    def clear_results(self):
-        if self.results_container:
-            self.results_container.clear_widgets()
-        self.all_buttons.clear()
-
-    def update_row(self, ip: str, alive: bool, ports_text: str, hostname: str):
-        from kivy.app import App
+    def on_toggle_active(self, active):
         app = App.get_running_app()
-        text = f"{ip} | {'Alive' if alive else 'Dead'} | {ports_text or '-'} | {hostname or '-'}"
-
-        if ip in self.all_buttons:
-            btn = self.all_buttons[ip]
-            btn.text = text
-        else:
-            btn = Button(
-                text=text,
-                size_hint_y=None,
-                height=30,
-                halign='left',
-            )
-            btn.bind(on_release=lambda inst, ip=ip: app.open_details(ip))
-            self.all_buttons[ip] = btn
-
-        # Apply filter for this IP (show/hide)
-        self.apply_filter_for_ip(ip, app)
-
-    def apply_filter_for_ip(self, ip: str, app):
-        btn = self.all_buttons.get(ip)
-        if not btn:
-            return
-        should_show = app.ip_passes_filter(ip)
-        container = self.results_container
-        if should_show:
-            if btn.parent is None:
-                container.add_widget(btn)
-        else:
-            if btn.parent is not None:
-                container.remove_widget(btn)
-
-    def apply_filters_to_all(self, app):
-        for ip in list(self.all_buttons.keys()):
-            self.apply_filter_for_ip(ip, app)
-
-
-class DetailsScreen(Screen):
-    ip_text = StringProperty("")
-    status_text = StringProperty("")
-    host_text = StringProperty("")
-    mac_text = StringProperty("")
-    ping_text = StringProperty("")
-    ttl_text = StringProperty("")
-    os_text = StringProperty("")
-    ports_text = StringProperty("")
-
-    def set_details(
-        self, ip, alive_text, hostname, mac, ping, ttl, os_guess, ports_text
-    ):
-        self.ip_text = ip
-        self.status_text = alive_text
-        self.host_text = hostname
-        self.mac_text = mac
-        self.ping_text = ping
-        self.ttl_text = ttl
-        self.os_text = os_guess
-        self.ports_text = ports_text
-
-
-# =============== Main app ==================
-
-class MainApp(App):
-    COMMON_PORTS = [53, 80, 135, 139, 143, 443, 445, 1883, 3074, 3306, 3389, 3659, 5222, 8080, 5222, 1883, 6379, 27017, 11211, 27015, 25565]
-
-    # Scan settings
-    scan_mode = StringProperty("local")      # local / cidr / range
-    cidr = StringProperty("192.168.0.0/24")
-    ip_start = StringProperty("192.168.0.1")
-    ip_end = StringProperty("192.168.0.245")
-
-    ports_mode = StringProperty("common")    # common / range / custom
-    end_port = StringProperty("1024")
-    custom_ports = StringProperty("53,80,443,110,143,1883,3306,3389,5222,6379,8080")
-
-    ping_first = BooleanProperty(True)
-    resolve_dns = BooleanProperty(True)
-
-    host_workers = StringProperty("200")
-    port_workers = StringProperty("100")
-    tcp_timeout = StringProperty("0.4")
-    ping_timeout = StringProperty("1.0")
-
-    status_text = StringProperty("Ready")
-    progress_value = NumericProperty(0)
-    progress_max = NumericProperty(1)
-
-    # Filters
-    only_alive = BooleanProperty(True)
-    only_hostname = BooleanProperty(True)
-
-    scanning = BooleanProperty(False)
-    selected_ip = StringProperty("")
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.scanner = None
-        self.stop_event = None
-        self.alive_by_ip = {}
-        self.open_ports_by_ip = {}
-        self.hostname_by_ip = {}
-
-    def build(self):
-        self.title = "LAN Scanner - Kivy"
-        Builder.load_string(KV)
-        sm = ScreenManager()
-        sm.add_widget(ConfigScreen(name="config"))
-        sm.add_widget(ResultsScreen(name="results"))
-        sm.add_widget(DetailsScreen(name="details"))
-        return sm
-
-    # ---------- Filter helpers ----------
-
-    def ip_passes_filter(self, ip: str) -> bool:
-        if self.only_alive and not self.alive_by_ip.get(ip, False):
-            return False
-        if self.only_hostname and not (self.hostname_by_ip.get(ip) or "").strip():
-            return False
-        return True
-
-    def on_filter_changed(self):
-        if not self.root:
-            return
-        res = self.root.get_screen("results")
-        res.apply_filters_to_all(self)
-
-    # ---------- Message helpers ----------
-
-    def show_message(self, title, text):
-        content = BoxLayout(orientation="vertical", padding=10, spacing=10)
-        content.add_widget(Label(text=text))
-        btn = Button(text="Close", size_hint_y=None, height=40)
-        content.add_widget(btn)
-        popup = Popup(title=title, content=content, size_hint=(0.8, 0.4))
-        btn.bind(on_release=popup.dismiss)
-        popup.open()
-
-    def show_error(self, text):
-        self.show_message("Error", text)
-
-    def show_info(self, text):
-        self.show_message("Info", text)
-
-    # ---------- Config reading ----------
-
-    def read_config(self):
         try:
-            host_workers = max(1, int(self.host_workers))
-            port_workers = max(1, int(self.port_workers))
-        except ValueError:
-            raise ValueError("Thread values must be integers.")
+            app.reminder_manager.set_enabled(self.reminder_id, active)
+        except Exception as exc:
+            print("Error updating enabled state:", exc)
+
+    def on_delete(self):
+        app = App.get_running_app()
+        try:
+            app.reminder_manager.delete_reminder(self.reminder_id)
+        except Exception as exc:
+            print("Error deleting reminder:", exc)
+        # Remove widget from UI
+        if self.parent:
+            self.parent.remove_widget(self)
+
+
+class RootWidget(BoxLayout):
+    def on_kv_post(self, base_widget):
+        """Called after kv language is applied."""
+        self._setup_date_spinners()
+        # Make sure scroll is at top
+        self.ids.reminders_scroll.scroll_y = 1
+
+    def _setup_date_spinners(self):
+        now = datetime.now()
+        years = [str(y) for y in range(now.year, now.year + 5)]
+        months = [f"{m:02d}" for m in range(1, 13)]
+        days = [f"{d:02d}" for d in range(1, 32)]
+
+        self.ids.year_spinner.values = years
+        self.ids.year_spinner.text = str(now.year)
+
+        self.ids.month_spinner.values = months
+        self.ids.month_spinner.text = f"{now.month:02d}"
+
+        self.ids.day_spinner.values = days
+        self.ids.day_spinner.text = f"{now.day:02d}"
+
+    def init_ui(self, manager):
+        """Called from App.on_start with the ReminderManager."""
+        # Load existing reminders into the scroll list
+        reminders = list(manager.reminders)
+        # Sort by next_run if exists
+        def sort_key(r):
+            return r.get("next_run", "") or ""
+        reminders.sort(key=sort_key)
+        container = self.ids.reminders_container
+        container.clear_widgets()
+        for r in reminders:
+            self.add_reminder_widget(r)
+
+    def format_reminder_summary(self, reminder):
+        message = reminder.get("message", "")
+        calendar_type = reminder.get("calendar", "gregorian").capitalize()
+        repeat = reminder.get("repeat", "once").capitalize()
+
+        year = int(reminder.get("year", 0) or 0)
+        month = int(reminder.get("month", 0) or 0)
+        day = int(reminder.get("day", 0) or 0)
+        hour = int(reminder.get("hour", 0) or 0)
+        minute = int(reminder.get("minute", 0) or 0)
+
+        state = "ON" if reminder.get("enabled", True) else "OFF"
+
+        date_part = f"{year:04d}-{month:02d}-{day:02d}"
+        time_part = f"{hour:02d}:{minute:02d}"
+
+        base = f"{message} | {calendar_type} {date_part} {time_part} | {repeat}"
+        return f"[{state}] {base}"
+
+    def add_reminder_widget(self, reminder):
+        summary_text = self.format_reminder_summary(reminder)
+        item = ReminderItem(
+            reminder_id=reminder.get("id", 0),
+            enabled=reminder.get("enabled", True),
+            summary=summary_text,
+        )
+        # Add to top of the list
+        self.ids.reminders_container.add_widget(item, index=0)
+
+    def set_reminder_enabled(self, reminder_id, enabled):
+        container = self.ids.reminders_container
+        for child in container.children:
+            if isinstance(child, ReminderItem) and child.reminder_id == reminder_id:
+                child.enabled = enabled
+                # Also refresh summary text to update [ON]/[OFF]
+                app = App.get_running_app()
+                for r in app.reminder_manager.reminders:
+                    if r.get("id") == reminder_id:
+                        child.summary = self.format_reminder_summary(r)
+                        break
+                break
+
+    def add_reminder(self):
+        app = App.get_running_app()
+        message = self.ids.message_input.text.strip()
+        repeat = self.ids.repeat_spinner.text.strip().lower()  # once/daily/weekly/monthly
+        calendar_type = self.ids.calendar_spinner.text.strip().lower()  # gregorian/jalali
+        year_text = self.ids.year_spinner.text.strip()
+        month_text = self.ids.month_spinner.text.strip()
+        day_text = self.ids.day_spinner.text.strip()
+        hour_text = self.ids.hour_input.text.strip()
+        minute_text = self.ids.minute_input.text.strip()
+        sound_path = self.ids.sound_input.text.strip()
+
+        if not message:
+            self.ids.status_label.text = "Please enter a message."
+            return
+
+        if not (year_text and month_text and day_text):
+            self.ids.status_label.text = "Please select year, month and day."
+            return
+
+        if not hour_text or not minute_text:
+            self.ids.status_label.text = "Please enter hour and minute."
+            return
 
         try:
-            tcp_timeout = float(self.tcp_timeout)
-            ping_timeout = float(self.ping_timeout)
-            if tcp_timeout <= 0 or ping_timeout <= 0:
-                raise ValueError
+            year = int(year_text)
+            month = int(month_text)
+            day = int(day_text)
+            hour = int(hour_text)
+            minute = int(minute_text)
         except ValueError:
-            raise ValueError("Timeout values must be positive floats.")
+            self.ids.status_label.text = "Invalid date/time format."
+            return
 
-        pmode = self.ports_mode
-        if pmode == "common":
-            ports = list(self.COMMON_PORTS)
-        elif pmode == "range":
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            self.ids.status_label.text = "Hour/minute out of range."
+            return
+
+        # Validate Gregorian date if calendar is Gregorian
+        if calendar_type == "gregorian":
             try:
-                end_n = int(self.end_port)
-                if not (1 <= end_n <= 65535):
-                    raise ValueError
+                datetime(year, month, day)
             except ValueError:
-                raise ValueError("N must be between 1 and 65535.")
-            ports = list(range(1, end_n + 1))
-        else:
-            ports = self.parse_ports_list(self.custom_ports)
+                self.ids.status_label.text = "Invalid Gregorian date."
+                return
 
-        cfg = {
-            "mode": self.scan_mode,
-            "cidr": self.cidr.strip(),
-            "ip_start": self.ip_start.strip(),
-            "ip_end": self.ip_end.strip(),
-            "ports": ports,
-            "ping_first": bool(self.ping_first),
-            "resolve_dns": bool(self.resolve_dns),
-            "host_workers": host_workers,
-            "port_workers": port_workers,
-            "tcp_timeout": tcp_timeout,
-            "ping_timeout": ping_timeout,
-        }
-        return cfg
+        try:
+            reminder = app.reminder_manager.add_reminder(
+                message=message,
+                repeat=repeat,
+                calendar_type=calendar_type,
+                year=year,
+                month=month,
+                day=day,
+                hour=hour,
+                minute=minute,
+                sound_path=sound_path,
+            )
+        except ValueError as exc:
+            self.ids.status_label.text = f"Error: {exc}"
+            return
+        except Exception as exc:
+            self.ids.status_label.text = f"Unexpected error: {exc}"
+            return
+
+        # Add to UI list
+        self.add_reminder_widget(reminder)
+
+        self.ids.status_label.text = "Reminder saved."
+
+    # Optionally you can add a method to refresh the list entirely
+    def refresh_list_from_manager(self, manager):
+        reminders = list(manager.reminders)
+        def sort_key(r):
+            return r.get("next_run", "") or ""
+        reminders.sort(key=sort_key)
+        container = self.ids.reminders_container
+        container.clear_widgets()
+        for r in reminders:
+            self.add_reminder_widget(r)
+
+
+class ReminderManager:
+    def __init__(self, data_file_path):
+        self.data_file_path = data_file_path
+        self.reminders = []
+        self._lock = threading.Lock()
+        self._load()
+
+    def _load(self):
+        if os.path.exists(self.data_file_path):
+            try:
+                with open(self.data_file_path, "r", encoding="utf-8") as f:
+                    self.reminders = json.load(f)
+            except Exception:
+                self.reminders = []
+        else:
+            self.reminders = []
+
+        # Ensure "enabled" field exists
+        for r in self.reminders:
+            if "enabled" not in r:
+                r["enabled"] = True
+
+    def _save(self):
+        tmp_path = self.data_file_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(self.reminders, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self.data_file_path)
 
     @staticmethod
-    def parse_ports_list(text: str):
-        text = (text or "").strip()
-        if not text:
-            raise ValueError("Port list is empty.")
-        result = set()
-        for part in text.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "-" in part:
-                try:
-                    s, e = part.split("-", 1)
-                    s, e = int(s), int(e)
-                    if s > e:
-                        s, e = e, s
-                    if s < 1 or e > 65535:
-                        raise ValueError
-                    result.update(range(s, e + 1))
-                except Exception:
-                    raise ValueError(f"Invalid port range: {part}")
+    def _add_months(dt, months):
+        month = dt.month - 1 + months
+        year = dt.year + month // 12
+        month = month % 12 + 1
+        day = min(dt.day, calendar.monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day)
+
+    def _advance_from(self, dt, repeat, now):
+        while dt <= now:
+            if repeat == "daily":
+                dt += timedelta(days=1)
+            elif repeat == "weekly":
+                dt += timedelta(weeks=1)
+            elif repeat == "monthly":
+                dt = self._add_months(dt, 1)
             else:
-                try:
-                    p = int(part)
-                    if not (1 <= p <= 65535):
-                        raise ValueError
-                except Exception:
-                    raise ValueError(f"Invalid port: {part}")
-                result.add(p)
-        return sorted(result)
+                break
+        return dt
 
-    def build_targets(self, cfg):
-        mode = cfg["mode"]
-        if mode == "local":
-            local_ip = LanScanner().get_local_ip()
-            parts = local_ip.split(".")
-            if len(parts) != 4:
-                raise ValueError("Invalid local IP.")
-            cidr = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-            net = ipaddress.ip_network(cidr, strict=False)
-            return [str(h) for h in net.hosts()]
-        elif mode == "cidr":
-            try:
-                net = ipaddress.ip_network(cfg["cidr"], strict=False)
-            except Exception:
-                raise ValueError("Invalid CIDR. Example: 192.168.1.0/24")
-            return [str(h) for h in net.hosts()]
+    def add_reminder(
+        self,
+        message,
+        repeat,
+        calendar_type,
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        sound_path,
+    ):
+        repeat = repeat.lower()
+        calendar_type = calendar_type.lower()
+
+        if repeat not in ("once", "daily", "weekly", "monthly"):
+            raise ValueError("Invalid repeat type.")
+        if calendar_type not in ("gregorian", "jalali"):
+            raise ValueError("Invalid calendar type.")
+
+        # For simplicity, we treat the date as Gregorian datetime internally.
+        # If you really need Jalali logic, you must convert it using a Jalali library.
+        base_dt = datetime(year, month, day, hour, minute, 0)
+        now = datetime.now()
+
+        if repeat == "once":
+            if base_dt <= now:
+                raise ValueError("Selected date/time is in the past for 'Once' reminder.")
+            next_run = base_dt
         else:
-            try:
-                a = int(ipaddress.IPv4Address(cfg["ip_start"]))
-                b = int(ipaddress.IPv4Address(cfg["ip_end"]))
-            except Exception:
-                raise ValueError("Invalid IP range.")
-            if a > b:
-                a, b = b, a
-            return [str(ipaddress.IPv4Address(i)) for i in range(a, b + 1)]
+            # Repeating reminder: schedule next_run in the future
+            if base_dt <= now:
+                next_run = self._advance_from(base_dt, repeat, now)
+            else:
+                next_run = base_dt
 
-    # ---------- Scan control ----------
+        with self._lock:
+            new_id = max((r.get("id", 0) for r in self.reminders), default=0) + 1
+            reminder = {
+                "id": new_id,
+                "message": message,
+                "repeat": repeat,
+                "calendar": calendar_type,
+                "year": year,
+                "month": month,
+                "day": day,
+                "hour": hour,
+                "minute": minute,
+                "sound_path": sound_path,
+                "enabled": True,
+                "next_run": next_run.isoformat(timespec="seconds"),
+            }
+            self.reminders.append(reminder)
+            self._save()
+            return reminder
 
-    def start_scan(self):
-        if self.scanning:
-            return
+    def _advance_next_run(self, reminder, now=None):
+        if now is None:
+            now = datetime.now()
+        repeat = reminder.get("repeat", "once")
         try:
-            cfg = self.read_config()
-        except ValueError as e:
-            self.show_error(str(e))
-            return
-
-        self.clear_results()
-        self.stop_event = threading.Event()
-        self.scanning = True
-        self.status_text = "Starting scan..."
-
-        self.scanner = LanScanner(
-            timeout=cfg["tcp_timeout"], ping_timeout=cfg["ping_timeout"]
-        )
-
-        t = threading.Thread(target=self.scan_worker, args=(cfg,), daemon=True)
-        t.start()
-
-        self.root.current = "results"
-
-    def stop_scan(self):
-        if self.scanning and self.stop_event:
-            self.stop_event.set()
-            self.status_text = "Stopping..."
-
-    def clear_results(self):
-        self.alive_by_ip.clear()
-        self.open_ports_by_ip.clear()
-        self.hostname_by_ip.clear()
-        self.progress_value = 0
-        self.progress_max = 1
-        self.status_text = "Ready"
-        res = self.root.get_screen("results")
-        res.clear_results()
-
-    def ui_call(self, func, *args, **kwargs):
-        def _wrap(dt):
-            func(*args, **kwargs)
-
-        Clock.schedule_once(_wrap)
-
-    def set_progress_max(self, maxv):
-        self.progress_max = max(1, maxv)
-        self.progress_value = 0
-
-    def update_progress_and_status(self, done, total, stage):
-        self.progress_max = max(1, total)
-        self.progress_value = min(done, total)
-        if stage == "hosts":
-            self.status_text = f"Scanning hosts: {done}/{total}"
-        else:
-            self.status_text = f"Scanning ports: {done}/{total}"
-
-    def finish_scan(self, msg):
-        self.scanning = False
-        self.status_text = msg
-
-    def insert_or_update_ip(self, ip, alive):
-        self.alive_by_ip[ip] = bool(alive)
-        if ip not in self.open_ports_by_ip:
-            self.open_ports_by_ip[ip] = []
-        if ip not in self.hostname_by_ip:
-            self.hostname_by_ip[ip] = ""
-        res = self.root.get_screen("results")
-        res.update_row(ip, bool(alive), self.ports_text(ip), self.hostname_by_ip[ip])
-
-    def update_ports_cell(self, ip, ports_list):
-        self.open_ports_by_ip[ip] = sorted(set(ports_list))
-        had_alive = bool(self.alive_by_ip.get(ip))
-        has_ports = len(self.open_ports_by_ip[ip]) > 0
-        alive_now = had_alive or has_ports
-        self.alive_by_ip[ip] = alive_now
-
-        if ip not in self.hostname_by_ip:
-            self.hostname_by_ip[ip] = ""
-
-        res = self.root.get_screen("results")
-        res.update_row(ip, alive_now, self.ports_text(ip), self.hostname_by_ip[ip])
-
-    def update_host_cell(self, ip, host):
-        self.hostname_by_ip[ip] = host or ""
-        alive = bool(self.alive_by_ip.get(ip))
-        res = self.root.get_screen("results")
-        res.update_row(ip, alive, self.ports_text(ip), self.hostname_by_ip[ip])
-
-    def ports_text(self, ip):
-        ports = self.open_ports_by_ip.get(ip, [])
-        return ", ".join(str(p) for p in ports) if ports else ""
-
-    def resolve_dns_one(self, ip):
-        try:
-            host = socket.gethostbyaddr(ip)[0]
+            next_run = datetime.fromisoformat(reminder["next_run"])
         except Exception:
-            host = ""
-        if not self.stop_event or not self.stop_event.is_set():
-            self.ui_call(self.update_host_cell, ip, host)
+            next_run = now
 
-    def scan_worker(self, cfg):
-        try:
-            targets = self.build_targets(cfg)
-            total_hosts = len(targets)
-            if total_hosts == 0:
-                self.ui_call(self.finish_scan, "No targets to scan.")
-                return
+        if repeat == "once":
+            # Do not schedule again for one-time reminders
+            reminder["enabled"] = False
+            return
 
-            self.ui_call(self.set_progress_max, total_hosts)
-            self.ui_call(
-                lambda: setattr(
-                    self, "status_text", f"Scanning hosts: 0/{total_hosts}"
-                )
-            )
+        next_run = self._advance_from(next_run, repeat, now)
+        reminder["next_run"] = next_run.isoformat(timespec="seconds")
 
-            hosts_done = 0
+    def get_due_reminders(self):
+        now = datetime.now()
+        due = []
+        with self._lock:
+            for reminder in self.reminders:
+                if not reminder.get("enabled", True):
+                    continue
+                try:
+                    next_run = datetime.fromisoformat(reminder["next_run"])
+                except Exception:
+                    next_run = now
+                if next_run <= now:
+                    due.append(reminder.copy())
+                    self._advance_next_run(reminder, now=now)
+            if due:
+                self._save()
+        return due
 
-            if cfg["ping_first"]:
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=cfg["host_workers"]
-                ) as ex:
-                    future_map = {
-                        ex.submit(self.scanner._ping_host, ip): ip for ip in targets
-                    }
-                    for fut in concurrent.futures.as_completed(future_map):
-                        if self.stop_event.is_set():
-                            break
-                        ip = future_map[fut]
-                        alive = bool(fut.result())
-                        self.ui_call(self.insert_or_update_ip, ip, alive)
-                        hosts_done += 1
-                        self.ui_call(
-                            self.update_progress_and_status,
-                            hosts_done,
-                            total_hosts,
-                            "hosts",
-                        )
-            else:
-                for i, ip in enumerate(targets, start=1):
-                    if self.stop_event.is_set():
-                        break
-                    self.ui_call(self.insert_or_update_ip, ip, True)
-                    self.ui_call(
-                        self.update_progress_and_status, i, total_hosts, "hosts"
-                    )
-
-            if self.stop_event.is_set():
-                self.ui_call(self.finish_scan, "Stopped.")
-                return
-
-            ports = cfg["ports"]
-            if not ports:
-                self.ui_call(self.finish_scan, "Done.")
-                return
-
-            scan_hosts = list(targets)
-            total_port_tasks = len(scan_hosts) * len(ports)
-            if total_port_tasks == 0:
-                self.ui_call(self.finish_scan, "Done.")
-                return
-
-            done_port_tasks = 0
-            self.ui_call(self.set_progress_max, total_port_tasks)
-            self.ui_call(
-                lambda: setattr(
-                    self, "status_text", f"Scanning ports: 0/{total_port_tasks}"
-                )
-            )
-
-            for ip in scan_hosts:
-                if self.stop_event.is_set():
+    def set_enabled(self, reminder_id, enabled):
+        with self._lock:
+            for r in self.reminders:
+                if r.get("id") == reminder_id:
+                    r["enabled"] = bool(enabled)
+                    self._save()
                     break
 
-                open_ports = []
+    def delete_reminder(self, reminder_id):
+        with self._lock:
+            self.reminders = [r for r in self.reminders if r.get("id") != reminder_id]
+            self._save()
 
-                def check_port(p):
-                    if self.stop_event.is_set():
-                        return None
-                    return p if self.scanner._scan_port(ip, p) else None
 
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=cfg["port_workers"]
-                ) as ex:
-                    future_map = {ex.submit(check_port, p): p for p in ports}
-                    for fut in concurrent.futures.as_completed(future_map):
-                        if self.stop_event.is_set():
-                            break
-                        res_port = fut.result()
-                        if isinstance(res_port, int):
-                            open_ports.append(res_port)
-                            self.ui_call(
-                                self.update_ports_cell, ip, list(open_ports)
-                            )
-                        done_port_tasks += 1
-                        self.ui_call(
-                            self.update_progress_and_status,
-                            done_port_tasks,
-                            total_port_tasks,
-                            "ports",
-                        )
+class ReminderScheduler(threading.Thread):
+    def __init__(self, manager, callback, interval_seconds=30):
+        super().__init__(daemon=True)
+        self.manager = manager
+        self.callback = callback
+        self.interval_seconds = interval_seconds
+        self._stop_event = threading.Event()
 
-                if cfg["resolve_dns"]:
-                    threading.Thread(
-                        target=self.resolve_dns_one, args=(ip,), daemon=True
-                    ).start()
+    def run(self):
+        while not self._stop_event.is_set():
+            due_reminders = self.manager.get_due_reminders()
+            if due_reminders:
+                for reminder in due_reminders:
+                    self.callback(reminder)
+            total = 0
+            while total < self.interval_seconds and not self._stop_event.is_set():
+                time.sleep(1)
+                total += 1
 
-            if self.stop_event.is_set():
-                self.ui_call(self.finish_scan, "Stopped.")
-            else:
-                self.ui_call(self.finish_scan, "Done.")
+    def stop(self):
+        self._stop_event.set()
 
-        except Exception as e:
-            self.ui_call(self.show_error, str(e))
-            self.ui_call(self.finish_scan, "Error")
 
-    # ---------- Navigation / save ----------
+class ReminderApp(App):
+    def build(self):
+        self.title = "Kivy Reminder"
+        Builder.load_string(KV)
+        self.reminder_manager = None
+        self.scheduler = None
+        return RootWidget()
 
-    def go_to_config(self):
-        self.root.current = "config"
+    def on_start(self):
+        data_dir = self.user_data_dir
+        os.makedirs(data_dir, exist_ok=True)
+        data_path = os.path.join(data_dir, "reminders.json")
 
-    def save_csv(self):
-        if not self.alive_by_ip:
-            self.show_info("No results to save.")
-            return
+        self.reminder_manager = ReminderManager(data_path)
 
-        path = os.path.join(self.user_data_dir, "lan_scan_results.csv")
-        try:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["IP", "Alive", "Open Ports", "Hostname"])
-                for ip in sorted(self.alive_by_ip.keys()):
-                    if not self.ip_passes_filter(ip):
-                        continue
-                    alive = "Yes" if self.alive_by_ip.get(ip) else "No"
-                    ports = self.ports_text(ip)
-                    host = self.hostname_by_ip.get(ip, "")
-                    w.writerow([ip, alive, ports, host])
-            self.show_info(f"CSV saved to:\n{path}")
-        except Exception as e:
-            self.show_error(f"Error saving CSV:\n{e}")
+        # Initialize UI list from saved reminders
+        self.root.init_ui(self.reminder_manager)
 
-    # ---------- Details helpers ----------
-
-    def _get_mac_address(self, ip: str) -> str:
-        try:
-            sys_name = platform.system().lower()
-            if sys_name == "windows":
-                cmd = ["arp", "-a", ip]
-            else:
-                cmd = ["arp", "-n", ip]
-            output = subprocess.check_output(cmd, encoding="utf-8", errors="ignore")
-            import re
-
-            match = re.search(
-                r"([0-9A-Fa-f]{2}[-:]){5}([0-9A-Fa-f]{2})", output
-            )
-            if match:
-                return match.group(0)
-        except Exception:
-            pass
-        return "Unknown"
-
-    def _get_ping_info(self, ip: str):
-        sys_name = platform.system().lower()
-        try:
-            if sys_name == "windows":
-                cmd = ["ping", "-n", "1", "-w", "1000", ip]
-            elif sys_name == "linux":
-                cmd = ["ping", "-c", "1", "-W", "1", ip]
-            else:
-                cmd = ["ping", "-c", "1", ip]
-            output = subprocess.check_output(cmd, encoding="utf-8", errors="ignore")
-        except Exception:
-            return None, None
-
-        import re
-
-        ttl = None
-        time_ms = None
-
-        m_ttl = re.search(r"TTL[=:\s]+(\d+)", output, re.IGNORECASE)
-        if not m_ttl:
-            m_ttl = re.search(r"ttl[=:\s]+(\d+)", output, re.IGNORECASE)
-        if m_ttl:
-            try:
-                ttl = int(m_ttl.group(1))
-            except Exception:
-                ttl = None
-
-        m_time = re.search(r"time[=<]?\s*([\d\.]+)\s*ms", output, re.IGNORECASE)
-        if m_time:
-            try:
-                time_ms = float(m_time.group(1))
-            except Exception:
-                time_ms = None
-
-        return time_ms, ttl
-
-    @staticmethod
-    def _guess_os_from_ttl(ttl):
-        if ttl is None:
-            return "Unknown"
-        if ttl <= 64:
-            return "Probably Linux/Unix"
-        elif ttl <= 128:
-            return "Probably Windows"
-        elif ttl <= 255:
-            return "Probably router/network device"
-        else:
-            return "Unknown"
-
-    def open_details(self, ip: str):
-        self.selected_ip = ip
-        alive = bool(self.alive_by_ip.get(ip))
-        ports = self.open_ports_by_ip.get(ip, [])
-        hostname = self.hostname_by_ip.get(ip, "")
-
-        ping_ms, ttl = self._get_ping_info(ip)
-        mac_addr = self._get_mac_address(ip)
-        os_guess = self._guess_os_from_ttl(ttl)
-
-        ports_lines = []
-        if ports:
-            for p in ports:
-                try:
-                    srv = socket.getservbyport(p, "tcp")
-                except Exception:
-                    srv = "-"
-                ports_lines.append(f"{p}  ({srv})")
-        else:
-            ports_lines.append("No open ports reported.")
-
-        details_screen = self.root.get_screen("details")
-        details_screen.set_details(
-            ip=ip,
-            alive_text="Alive" if alive else "No reply",
-            hostname=hostname or "-",
-            mac=mac_addr,
-            ping=f"{ping_ms:.1f} ms" if ping_ms is not None else "Unknown",
-            ttl=str(ttl) if ttl is not None else "Unknown",
-            os_guess=os_guess,
-            ports_text="\n".join(ports_lines),
+        # Start background scheduler
+        self.scheduler = ReminderScheduler(
+            manager=self.reminder_manager,
+            callback=self.on_reminder_due,
+            interval_seconds=30,
         )
-        self.root.current = "details"
+        self.scheduler.start()
+
+    def on_stop(self):
+        if self.scheduler is not None:
+            self.scheduler.stop()
+
+    def on_reminder_due(self, reminder):
+        # Run on main thread
+        Clock.schedule_once(lambda dt: self._handle_due_on_main(reminder))
+
+    def _handle_due_on_main(self, reminder):
+        self._show_notification_and_sound(reminder)
+        # If it was a one-time reminder, it has been disabled in the manager;
+        # update UI checkbox state as well.
+        if reminder.get("repeat", "once") == "once":
+            try:
+                self.root.set_reminder_enabled(reminder["id"], False)
+            except Exception as exc:
+                print("Error updating UI after one-time reminder:", exc)
+
+    def _show_notification_and_sound(self, reminder):
+        message = reminder.get("message", "")
+        sound_path = (reminder.get("sound_path") or "").strip()
+
+        try:
+            notification.notify(
+                title="Reminder",
+                message=message,
+                timeout=10,
+            )
+        except Exception as exc:
+            print("Notification error:", exc)
+
+        if sound_path:
+            try:
+                sound = SoundLoader.load(sound_path)
+                if sound:
+                    sound.play()
+            except Exception as exc:
+                print("Sound error:", exc)
 
 
 if __name__ == "__main__":
-    MainApp().run()
+    ReminderApp().run()
