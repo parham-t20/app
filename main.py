@@ -1,7 +1,6 @@
 import os
 import json
 import threading
-import time
 import calendar
 from datetime import datetime, timedelta
 
@@ -11,8 +10,26 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.clock import Clock
 from kivy.core.audio import SoundLoader
 from kivy.properties import NumericProperty, BooleanProperty, StringProperty
+from kivy.uix.checkbox import CheckBox
+from kivy.utils import platform
 
-from plyer import notification
+# Try to import plyer.notification
+try:
+    from plyer import notification
+    PLYER_AVAILABLE = True
+except Exception as e:
+    print("plyer.notification import failed:", e)
+    PLYER_AVAILABLE = False
+
+# Try to import android.permissions to request POST_NOTIFICATIONS on Android 13+
+ANDROID_PERMISSIONS_AVAILABLE = False
+if platform == "android":
+    try:
+        from android.permissions import request_permissions, Permission, check_permission
+        ANDROID_PERMISSIONS_AVAILABLE = True
+    except Exception as e:
+        print("android.permissions import failed:", e)
+        ANDROID_PERMISSIONS_AVAILABLE = False
 
 
 KV = """
@@ -22,13 +39,6 @@ KV = """
     height: "60dp"
     padding: "5dp"
     spacing: "5dp"
-    canvas.before:
-        Color:
-            rgba: (0.2, 0.2, 0.2, 0.15)
-        RoundedRectangle:
-            pos: self.pos
-            size: self.size
-            radius: [8, ]
 
     CheckBox:
         size_hint_x: None
@@ -54,7 +64,6 @@ KV = """
     padding: "10dp"
     spacing: "10dp"
 
-    # Top form
     BoxLayout:
         orientation: "vertical"
         size_hint_y: None
@@ -174,7 +183,6 @@ KV = """
 
     ScrollView:
         id: reminders_scroll
-        size_hint_y: 1
         do_scroll_x: False
 
         BoxLayout:
@@ -196,6 +204,10 @@ class ReminderItem(BoxLayout):
         app = App.get_running_app()
         try:
             app.reminder_manager.set_enabled(self.reminder_id, active)
+            for r in app.reminder_manager.reminders:
+                if r.get("id") == self.reminder_id:
+                    self.summary = app.root.format_reminder_summary(r)
+                    break
         except Exception as exc:
             print("Error updating enabled state:", exc)
 
@@ -205,16 +217,17 @@ class ReminderItem(BoxLayout):
             app.reminder_manager.delete_reminder(self.reminder_id)
         except Exception as exc:
             print("Error deleting reminder:", exc)
-        # Remove widget from UI
         if self.parent:
             self.parent.remove_widget(self)
 
 
 class RootWidget(BoxLayout):
-    def on_kv_post(self, base_widget):
-        """Called after kv language is applied."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        Clock.schedule_once(self._after_kv)
+
+    def _after_kv(self, dt):
         self._setup_date_spinners()
-        # Make sure scroll is at top
         self.ids.reminders_scroll.scroll_y = 1
 
     def _setup_date_spinners(self):
@@ -233,12 +246,11 @@ class RootWidget(BoxLayout):
         self.ids.day_spinner.text = f"{now.day:02d}"
 
     def init_ui(self, manager):
-        """Called from App.on_start with the ReminderManager."""
-        # Load existing reminders into the scroll list
         reminders = list(manager.reminders)
-        # Sort by next_run if exists
+
         def sort_key(r):
             return r.get("next_run", "") or ""
+
         reminders.sort(key=sort_key)
         container = self.ids.reminders_container
         container.clear_widgets()
@@ -271,7 +283,6 @@ class RootWidget(BoxLayout):
             enabled=reminder.get("enabled", True),
             summary=summary_text,
         )
-        # Add to top of the list
         self.ids.reminders_container.add_widget(item, index=0)
 
     def set_reminder_enabled(self, reminder_id, enabled):
@@ -279,7 +290,6 @@ class RootWidget(BoxLayout):
         for child in container.children:
             if isinstance(child, ReminderItem) and child.reminder_id == reminder_id:
                 child.enabled = enabled
-                # Also refresh summary text to update [ON]/[OFF]
                 app = App.get_running_app()
                 for r in app.reminder_manager.reminders:
                     if r.get("id") == reminder_id:
@@ -290,8 +300,8 @@ class RootWidget(BoxLayout):
     def add_reminder(self):
         app = App.get_running_app()
         message = self.ids.message_input.text.strip()
-        repeat = self.ids.repeat_spinner.text.strip().lower()  # once/daily/weekly/monthly
-        calendar_type = self.ids.calendar_spinner.text.strip().lower()  # gregorian/jalali
+        repeat = self.ids.repeat_spinner.text.strip().lower()
+        calendar_type = self.ids.calendar_spinner.text.strip().lower()
         year_text = self.ids.year_spinner.text.strip()
         month_text = self.ids.month_spinner.text.strip()
         day_text = self.ids.day_spinner.text.strip()
@@ -325,7 +335,6 @@ class RootWidget(BoxLayout):
             self.ids.status_label.text = "Hour/minute out of range."
             return
 
-        # Validate Gregorian date if calendar is Gregorian
         if calendar_type == "gregorian":
             try:
                 datetime(year, month, day)
@@ -352,21 +361,8 @@ class RootWidget(BoxLayout):
             self.ids.status_label.text = f"Unexpected error: {exc}"
             return
 
-        # Add to UI list
         self.add_reminder_widget(reminder)
-
         self.ids.status_label.text = "Reminder saved."
-
-    # Optionally you can add a method to refresh the list entirely
-    def refresh_list_from_manager(self, manager):
-        reminders = list(manager.reminders)
-        def sort_key(r):
-            return r.get("next_run", "") or ""
-        reminders.sort(key=sort_key)
-        container = self.ids.reminders_container
-        container.clear_widgets()
-        for r in reminders:
-            self.add_reminder_widget(r)
 
 
 class ReminderManager:
@@ -386,7 +382,6 @@ class ReminderManager:
         else:
             self.reminders = []
 
-        # Ensure "enabled" field exists
         for r in self.reminders:
             if "enabled" not in r:
                 r["enabled"] = True
@@ -437,17 +432,14 @@ class ReminderManager:
         if calendar_type not in ("gregorian", "jalali"):
             raise ValueError("Invalid calendar type.")
 
-        # For simplicity, we treat the date as Gregorian datetime internally.
-        # If you really need Jalali logic, you must convert it using a Jalali library.
         base_dt = datetime(year, month, day, hour, minute, 0)
         now = datetime.now()
 
         if repeat == "once":
             if base_dt <= now:
-                raise ValueError("Selected date/time is in the past for 'Once' reminder.")
+                raise ValueError("Selected date/time is in the past for 'Once'.")
             next_run = base_dt
         else:
-            # Repeating reminder: schedule next_run in the future
             if base_dt <= now:
                 next_run = self._advance_from(base_dt, repeat, now)
             else:
@@ -483,7 +475,6 @@ class ReminderManager:
             next_run = now
 
         if repeat == "once":
-            # Do not schedule again for one-time reminders
             reminder["enabled"] = False
             return
 
@@ -522,35 +513,11 @@ class ReminderManager:
             self._save()
 
 
-class ReminderScheduler(threading.Thread):
-    def __init__(self, manager, callback, interval_seconds=30):
-        super().__init__(daemon=True)
-        self.manager = manager
-        self.callback = callback
-        self.interval_seconds = interval_seconds
-        self._stop_event = threading.Event()
-
-    def run(self):
-        while not self._stop_event.is_set():
-            due_reminders = self.manager.get_due_reminders()
-            if due_reminders:
-                for reminder in due_reminders:
-                    self.callback(reminder)
-            total = 0
-            while total < self.interval_seconds and not self._stop_event.is_set():
-                time.sleep(1)
-                total += 1
-
-    def stop(self):
-        self._stop_event.set()
-
-
 class ReminderApp(App):
     def build(self):
         self.title = "Kivy Reminder"
         Builder.load_string(KV)
         self.reminder_manager = None
-        self.scheduler = None
         return RootWidget()
 
     def on_start(self):
@@ -559,48 +526,63 @@ class ReminderApp(App):
         data_path = os.path.join(data_dir, "reminders.json")
 
         self.reminder_manager = ReminderManager(data_path)
-
-        # Initialize UI list from saved reminders
         self.root.init_ui(self.reminder_manager)
 
-        # Start background scheduler
-        self.scheduler = ReminderScheduler(
-            manager=self.reminder_manager,
-            callback=self.on_reminder_due,
-            interval_seconds=30,
-        )
-        self.scheduler.start()
-
-    def on_stop(self):
-        if self.scheduler is not None:
-            self.scheduler.stop()
-
-    def on_reminder_due(self, reminder):
-        # Run on main thread
-        Clock.schedule_once(lambda dt: self._handle_due_on_main(reminder))
-
-    def _handle_due_on_main(self, reminder):
-        self._show_notification_and_sound(reminder)
-        # If it was a one-time reminder, it has been disabled in the manager;
-        # update UI checkbox state as well.
-        if reminder.get("repeat", "once") == "once":
+        if not PLYER_AVAILABLE:
             try:
-                self.root.set_reminder_enabled(reminder["id"], False)
-            except Exception as exc:
-                print("Error updating UI after one-time reminder:", exc)
+                self.root.ids.status_label.text = (
+                    "Warning: plyer.notification not available; OS notifications disabled."
+                )
+            except Exception:
+                pass
+
+        if platform == "android" and ANDROID_PERMISSIONS_AVAILABLE and PLYER_AVAILABLE:
+            try:
+                if not check_permission(Permission.POST_NOTIFICATIONS):
+                    request_permissions([Permission.POST_NOTIFICATIONS])
+            except Exception as e:
+                print("Error requesting notification permission:", e)
+
+        # Check reminders every 5 seconds (for easier testing)
+        Clock.schedule_interval(self._check_due_reminders, 5)
+
+    def _check_due_reminders(self, dt):
+        due_reminders = self.reminder_manager.get_due_reminders()
+        if not due_reminders:
+            return
+
+        messages = [r.get("message", "") for r in due_reminders]
+        msg_str = ", ".join(messages)
+        try:
+            self.root.ids.status_label.text = (
+                f"Triggered: {msg_str} at {datetime.now().strftime('%H:%M:%S')}"
+            )
+        except Exception:
+            pass
+
+        for reminder in due_reminders:
+            self._show_notification_and_sound(reminder)
+            if reminder.get("repeat", "once") == "once":
+                try:
+                    self.root.set_reminder_enabled(reminder["id"], False)
+                except Exception as exc:
+                    print("Error updating UI for one-time reminder:", exc)
 
     def _show_notification_and_sound(self, reminder):
         message = reminder.get("message", "")
         sound_path = (reminder.get("sound_path") or "").strip()
 
-        try:
-            notification.notify(
-                title="Reminder",
-                message=message,
-                timeout=10,
-            )
-        except Exception as exc:
-            print("Notification error:", exc)
+        if PLYER_AVAILABLE:
+            try:
+                notification.notify(
+                    title="Reminder",
+                    message=message,
+                    timeout=10,
+                )
+            except Exception as e:
+                print("Notification error:", e)
+        else:
+            print("Skipping OS notification: plyer not available.")
 
         if sound_path:
             try:
