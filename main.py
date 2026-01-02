@@ -8,11 +8,14 @@ import platform
 import ipaddress
 import concurrent.futures
 import math
+import time
+from datetime import datetime
 from typing import List, Optional, Tuple, Dict, Any, Callable
 
 from kivy.app import App
 from kivy.lang import Builder
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.properties import StringProperty, BooleanProperty, NumericProperty
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -21,7 +24,8 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Ellipse, Line, InstructionGroup
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.animation import Animation
 
 # referenced by KV
 from kivy.uix.togglebutton import ToggleButton
@@ -100,6 +104,12 @@ class PatternStore:
 # ==================== Pattern Lock Widget ====================
 
 class PatternLock(Widget):
+    """
+    گرید ۳×۳ با شماره‌گذاری ۰..۸:
+    ردیف پایین: 0 1 2
+    ردیف وسط : 3 4 5
+    ردیف بالا : 6 7 8
+    """
     dot_radius = dp(18)
     hit_radius = dp(28)
 
@@ -170,7 +180,8 @@ class PatternLock(Widget):
                 radius = self.dot_radius
 
             self._dots_group.add(color)
-            self._dots_group.add(Ellipse(pos=(cx - radius, cy - radius), size=(2 * radius, 2 * radius)))
+            self._dots_group.add(Ellipse(pos=(cx - radius, cy - radius),
+                                         size=(2 * radius, 2 * radius)))
 
     def _redraw_path(self):
         self._line_group.clear()
@@ -185,7 +196,8 @@ class PatternLock(Widget):
 
         r, g, b, _a = self._feedback_color()
         self._line_group.add(Color(r, g, b, 0.95))
-        self._path_line = Line(points=pts, width=dp(3), cap="round", joint="round")
+        self._path_line = Line(points=pts, width=dp(3),
+                               cap="round", joint="round")
         self._line_group.add(self._path_line)
 
     def set_feedback(self, mode: str):
@@ -210,11 +222,49 @@ class PatternLock(Widget):
                 best_i = i
         return best_i
 
-    def _add_dot_if_new(self, idx: int):
+    def _get_middle_index(self, a: int, b: int) -> Optional[int]:
+        """
+        اگر خط مستقیم بین a و b از مرکز یک نقطه‌ی دیگر رد شود،
+        ایندکس آن نقطه را برمی‌گرداند (برای افزودن خودکار وسط مثل اندروید).
+        """
+        if a == b:
+            return None
+        ra, ca = divmod(a, 3)
+        rb, cb = divmod(b, 3)
+        dr = rb - ra
+        dc = cb - ca
+
+        if dr % 2 != 0 or dc % 2 != 0:
+            return None
+
+        mr = ra + dr // 2
+        mc = ca + dc // 2
+        if not (0 <= mr < 3 and 0 <= mc < 3):
+            return None
+
+        if abs(dr) <= 1 and abs(dc) <= 1:
+            return None
+
+        mid = mr * 3 + mc
+        if mid == a or mid == b:
+            return None
+        return mid
+
+    def _add_dot_forward(self, idx: int):
+        """
+        افزودن نقطه در حرکت رو به جلو، با درنظرگرفتن نقطه‌ی وسط.
+        """
+        if self.pattern:
+            prev = self.pattern[-1]
+            mid = self._get_middle_index(prev, idx)
+            if mid is not None and mid not in self.pattern:
+                self.pattern.append(mid)
+
         if idx not in self.pattern:
             self.pattern.append(idx)
-            self._draw_dots()
-            self._redraw_path()
+
+        self._draw_dots()
+        self._redraw_path()
 
     def on_touch_down(self, touch):
         if self.input_locked:
@@ -224,7 +274,7 @@ class PatternLock(Widget):
 
         idx = self._hit_test(*touch.pos)
         if idx is not None:
-            self._add_dot_if_new(idx)
+            self._add_dot_forward(idx)
             touch.grab(self)
             return True
         return True
@@ -236,8 +286,26 @@ class PatternLock(Widget):
             return super().on_touch_move(touch)
 
         idx = self._hit_test(*touch.pos)
-        if idx is not None:
-            self._add_dot_if_new(idx)
+        if idx is None:
+            return True
+
+        if not self.pattern:
+            self._add_dot_forward(idx)
+            return True
+
+        # امکان برگشت روی مسیر: اگر به نقطه‌ی قبلی برگشتیم، آخرین نقطه حذف شود
+        if len(self.pattern) >= 2 and idx == self.pattern[-2]:
+            self.pattern.pop()
+            self._draw_dots()
+            self._redraw_path()
+            return True
+
+        # اگر هنوز روی همان آخرین نقطه‌ایم، کاری نکن
+        if idx == self.pattern[-1]:
+            return True
+
+        # در غیر این صورت، حرکت رو به جلو است
+        self._add_dot_forward(idx)
         return True
 
     def on_touch_up(self, touch):
@@ -258,6 +326,38 @@ class PatternLock(Widget):
         return True
 
 
+# ==================== Clock Label ====================
+
+class BlinkingClock(Label):
+    """
+    ساعت HH:MM یا شمارنده‌ی قفل (mm:ss) اگر برنامه قفل باشد.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._show_colon = True
+        Clock.schedule_interval(self._update_time, 1.0)
+        self._update_time(0)
+
+    def _update_time(self, dt):
+        app = App.get_running_app()
+        remaining = 0.0
+        try:
+            remaining = float(getattr(app, "get_lock_remaining")())
+        except Exception:
+            remaining = 0.0
+
+        self._show_colon = not self._show_colon
+        sep = ":" if self._show_colon else " "
+
+        if remaining > 0:
+            secs = int(remaining)
+            mins, secs = divmod(secs, 60)
+            self.text = f"{mins:02d}{sep}{secs:02d}"
+        else:
+            now = datetime.now()
+            self.text = now.strftime(f"%H{sep}%M")
+
+
 # ==================== Screens ====================
 
 class LoginScreen(Screen):
@@ -275,8 +375,8 @@ class LoginScreen(Screen):
 
 
 class PasswordSettingsScreen(Screen):
-    help_text = StringProperty("")
-    status_text = StringProperty("")
+    # فقط یک متن برای راهنما/خطا/موفقیت
+    message_text = StringProperty("Draw a new pattern")
     mode = StringProperty("m")   # "m" or "g"
     step = StringProperty("first")  # "first" or "confirm"
 
@@ -296,12 +396,31 @@ class PasswordSettingsScreen(Screen):
     def _reset_flow(self):
         self.step = "first"
         self._first_pattern = None
-        self.status_text = ""
-        self.help_text = self._make_help()
+        self.message_text = "Draw a new pattern"
         try:
             self.ids.pw_lock.reset()
         except Exception:
             pass
+
+    def _animate_mode_switch(self, direction: str):
+        """اسلاید چپ/راست برای تعویض M/G."""
+        try:
+            lock = self.ids.pw_lock
+            msg = self.ids.msg_label
+            back = self.ids.back_btn
+        except Exception:
+            return
+
+        width = self.width or lock.width or dp(200)
+        offset = width * 0.6
+        dx = -offset if direction == "left" else offset
+        dur = 0.15
+
+        for w in (lock, msg, back):
+            base_x = w.x
+            a1 = Animation(x=base_x + dx, duration=dur)
+            a2 = Animation(x=base_x, duration=dur)
+            (a1 + a2).start(w)
 
     def set_mode(self, mode: str):
         mode = (mode or "").lower().strip()
@@ -309,20 +428,11 @@ class PasswordSettingsScreen(Screen):
             return
         if self.mode == mode:
             return
+        # جهت اسلاید
+        direction = "left" if (self.mode == "m" and mode == "g") else "right"
         self.mode = mode
+        self._animate_mode_switch(direction)
         self._reset_flow()
-
-    def _make_help(self) -> str:
-        app = App.get_running_app()
-        save_path = getattr(getattr(app, "pattern_store", None), "path", "(unknown)")
-        where = "phone" if app.is_mobile else "laptop/desktop"
-        target = "M (Login)" if self.mode == "m" else "G (Admin)"
-        return (
-            f"Target: {target}\n"
-            f"Step: {self.step}\n"
-            f"Saved on this device ({where}) at:\n{save_path}\n\n"
-            f"Draw a new pattern."
-        )
 
     def _show_temp_feedback(self, lock: PatternLock, mode: str, seconds: float, after=None):
         lock.set_feedback(mode)
@@ -339,31 +449,27 @@ class PasswordSettingsScreen(Screen):
 
     def _on_new_pattern_drawn(self, entered: Tuple[int, ...], lock: PatternLock):
         if not entered or len(entered) < 4:
-            self.status_text = "Pattern too short (minimum 4 dots)."
-            self.help_text = self._make_help()
+            self.message_text = "Pattern too short (minimum 4 dots)"
             self._show_temp_feedback(lock, "error", 1.0, after=self._reset_flow)
             return
 
         if self.step == "first":
             self._first_pattern = entered
             self.step = "confirm"
-            self.status_text = "Now draw the SAME pattern again to confirm."
-            self.help_text = self._make_help()
+            self.message_text = "Draw the same pattern again"
             self._show_temp_feedback(lock, "success", 0.35)
             return
 
-        # confirm step
+        # مرحله‌ی تأیید
         if self._first_pattern != entered:
-            self.status_text = "Patterns do not match. Try again."
-            self.help_text = self._make_help()
+            self.message_text = "Patterns do not match. Try again"
             self._show_temp_feedback(lock, "error", 1.0, after=self._reset_flow)
             return
 
         app = App.get_running_app()
         other = app.g_pattern if self.mode == "m" else app.m_pattern
         if entered == other:
-            self.status_text = "This pattern equals the other password. Choose a different one."
-            self.help_text = self._make_help()
+            self.message_text = "This pattern equals the other one. Choose a different pattern"
             self._show_temp_feedback(lock, "error", 1.0, after=self._reset_flow)
             return
 
@@ -373,8 +479,7 @@ class PasswordSettingsScreen(Screen):
             app.g_pattern = entered
 
         ok = app.save_patterns()
-        self.status_text = "Saved ✅" if ok else "Save failed ❌"
-        self.help_text = self._make_help()
+        self.message_text = "Saved" if ok else "Save failed"
         self._show_temp_feedback(lock, "success", 0.8, after=self._reset_flow)
 
     def go_back(self):
@@ -404,11 +509,7 @@ class LanScanner:
         return ip
 
     def _ping_host(self, ip):
-        """
-        روی اندروید/IOS از system ping استفاده نمی‌کنیم (سازگاری بهتر).
-        روی دسکتاپ اگر ping در سیستم باشد، از آن استفاده می‌کنیم.
-        """
-        # موبایل: یک "TCP ping" سبک روی پورت‌های رایج
+        # موبایل: TCP ping ساده
         if self._platform in ("android", "ios"):
             for port in (80, 443):
                 try:
@@ -418,7 +519,7 @@ class LanScanner:
                     continue
             return False
 
-        # دسکتاپ: تلاش برای استفاده از دستور ping سیستم
+        # دسکتاپ: دستور ping سیستم
         sys_name = platform.system().lower()
         try:
             if sys_name == "windows":
@@ -500,78 +601,117 @@ KV = r'''
 #:import dp kivy.metrics.dp
 
 <LoginScreen>:
-    BoxLayout:
-        padding: dp(18)
-        canvas.before:
-            Color:
-                rgba: 0.08, 0.08, 0.08, 1
-            Rectangle:
-                pos: self.pos
-                size: self.size
+    canvas.before:
+        Color:
+            rgba: 0.3, 0.15, 0.4, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    FloatLayout:
+
+        BlinkingClock:
+            id: clock_lbl
+            font_size: '32sp'
+            color: 1, 1, 1, 1
+            size_hint: None, None
+            size: dp(140), dp(40)
+            pos_hint: {'center_x': 0.5, 'top': 0.90}
+            halign: 'center'
+            valign: 'middle'
+            text_size: self.size
+
+        Label:
+            text: "Draw unlock pattern"
+            font_size: '20sp'
+            color: 1, 1, 1, 1
+            size_hint: 0.9, None
+            height: dp(28)
+            pos_hint: {'center_x': 0.5, 'center_y': 0.52}
+            text_size: self.size
+            halign: 'center'
+            valign: 'middle'
+
         PatternLock:
             id: lock
+            size_hint: None, None
+            size: dp(260), dp(260)
+            pos_hint: {'center_x': 0.5, 'center_y': 0.22}
+
 
 <PasswordSettingsScreen>:
-    BoxLayout:
-        orientation: "vertical"
-        padding: dp(12)
-        spacing: dp(10)
+    canvas.before:
+        Color:
+            rgba: 0.05, 0.05, 0.05, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
 
+    FloatLayout:
+
+        # نوار بالا: انتخاب M/G و عنوان
         BoxLayout:
+            orientation: 'vertical'
             size_hint_y: None
-            height: dp(44)
-            spacing: dp(8)
-
-            Button:
-                text: "Back"
-                size_hint_x: None
-                width: dp(90)
-                on_release: root.go_back()
+            height: dp(80)
+            size_hint_x: 0.95
+            pos_hint: {'center_x': 0.5, 'top': 0.98}
+            spacing: dp(4)
 
             Label:
-                text: "Change Patterns (draw to set)"
+                text: "Change Patterns"
+                font_size: '20sp'
                 text_size: self.width, None
-                halign: "left"
-                valign: "middle"
+                halign: 'left'
+                valign: 'middle'
 
-        BoxLayout:
-            size_hint_y: None
-            height: dp(42)
-            spacing: dp(8)
+            BoxLayout:
+                size_hint_y: None
+                height: dp(34)
+                spacing: dp(6)
 
-            ToggleButton:
-                id: mode_m
-                text: "M (Login)"
-                group: "mode"
-                state: "down"
-                on_state:
-                    if self.state == "down": root.set_mode("m")
+                ToggleButton:
+                    id: mode_m
+                    text: "M (Login)"
+                    group: "mode"
+                    state: "down"
+                    on_state:
+                        if self.state == "down": root.set_mode("m")
 
-            ToggleButton:
-                id: mode_g
-                text: "G (Admin)"
-                group: "mode"
-                on_state:
-                    if self.state == "down": root.set_mode("g")
+                ToggleButton:
+                    id: mode_g
+                    text: "G (Admin)"
+                    group: "mode"
+                    on_state:
+                        if self.state == "down": root.set_mode("g")
 
+        # لیبل اصلی: راهنما / پیام خطا / موفقیت
         Label:
-            text: root.help_text
-            size_hint_y: None
-            text_size: self.width, None
-            halign: "left"
-            valign: "top"
-            height: self.texture_size[1] + dp(8)
+            id: msg_label
+            text: root.message_text
+            font_size: '18sp'
+            size_hint: 0.9, None
+            height: dp(26)
+            pos_hint: {'center_x': 0.5, 'center_y': 0.64}
+            text_size: self.size
+            halign: 'center'
+            valign: 'middle'
 
+        # گرید ۳×۳
         PatternLock:
             id: pw_lock
+            size_hint: None, None
+            size: dp(260), dp(260)
+            pos_hint: {'center_x': 0.5, 'center_y': 0.36}
 
-        Label:
-            text: root.status_text
-            size_hint_y: None
-            text_size: self.width, None
-            halign: "left"
-            valign: "middle"
-            height: self.texture_size[1] + dp(8)
+        # دکمه‌ی Back زیر گرید
+        Button:
+            id: back_btn
+            text: "Back"
+            size_hint: 0.35, None
+            height: dp(40)
+            pos_hint: {'center_x': 0.5, 'y': 0.03}
+            on_release: root.go_back()
 
 
 <TextInput>:
@@ -673,7 +813,7 @@ KV = r'''
             background_color: (0.15, 0.55, 0.95, 1) if self.state == 'down' else (0.18, 0.18, 0.18, 1)
             color: 1,1,1,1
             on_state:
-                if self.state == 'down': root.ids.sm.current = 'config'
+                if self.state == 'down': root.switch_subscreen('config')
 
         ToggleButton:
             id: tab_vault
@@ -684,7 +824,7 @@ KV = r'''
             background_color: (0.15, 0.55, 0.95, 1) if self.state == 'down' else (0.18, 0.18, 0.18, 1)
             color: 1,1,1,1
             on_state:
-                if self.state == 'down': root.ids.sm.current = 'vault'
+                if self.state == 'down': root.switch_subscreen('vault')
 
     ScreenManager:
         id: sm
@@ -963,6 +1103,35 @@ class MainScreen(BoxLayout):
 
         Clock.schedule_once(self._init_storage, 0)
         Clock.schedule_once(self._start_auto_network_refresh, 0)
+
+    # ------------ زیر ScreenManager: جهت اسلاید  ------------
+
+    def switch_subscreen(self, target_name: str):
+        """
+        تغییر اسکرین‌های داخلی (config / results / vault) با اسلاید چپ/راست.
+        """
+        try:
+            sm = self.ids.sm
+        except Exception:
+            return
+
+        order = {'config': 0, 'results': 1, 'vault': 2}
+        current = sm.current
+        if target_name not in order or current not in order:
+            sm.current = target_name
+            return
+
+        if order[target_name] > order[current]:
+            direction = 'left'   # از راست به چپ (رفتن به جلو)
+        elif order[target_name] < order[current]:
+            direction = 'right'  # از چپ به راست (برگشت)
+        else:
+            return
+
+        sm.transition = SlideTransition(direction=direction, duration=0.25)
+        sm.current = target_name
+
+    # --------------------------------------------------------
 
     def _start_auto_network_refresh(self, _dt):
         self.request_network_info_refresh()
@@ -1278,9 +1447,10 @@ class MainScreen(BoxLayout):
 
         def switch_to_results(_dt):
             try:
-                self.ids.sm.current = "results"
-                self.ids.tab_config.state = "normal"
-                self.ids.tab_vault.state = "normal"
+                # از Settings به Results → اسلاید راست به چپ
+                self.switch_subscreen('results')
+                self.ids.tab_config.state = 'normal'
+                self.ids.tab_vault.state = 'normal'
             except Exception:
                 pass
 
@@ -1485,6 +1655,10 @@ class LanScannerApp(App):
         self.pattern_store: Optional[PatternStore] = None
         self.is_mobile: bool = False
 
+        self.failed_attempts: int = 0
+        self.lock_file_path: Optional[str] = None
+        self.locked_until_ts: float = 0.0
+
     def build(self):
         Builder.load_string(KV)
 
@@ -1505,6 +1679,10 @@ class LanScannerApp(App):
             self.g_pattern = loaded["g_pattern"]
         else:
             self.save_patterns()
+
+        # فایل قفل ۱ دقیقه‌ای
+        self.lock_file_path = os.path.join(base, "lock_state.json")
+        self._load_lock_state()
 
         sm = ScreenManager()
         sm.add_widget(LoginScreen(name="login"))
@@ -1528,25 +1706,69 @@ class LanScannerApp(App):
         }
         return self.pattern_store.save(self.m_pattern, self.g_pattern, extra=extra)
 
-    def go_to_login(self):
+    # ---------- مدیریت وضعیت قفل ----------
+    def _load_lock_state(self):
+        if not self.lock_file_path or not os.path.exists(self.lock_file_path):
+            return
         try:
-            self.root.current = "login"
+            with open(self.lock_file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.locked_until_ts = float(data.get("locked_until", 0.0))
+        except Exception:
+            self.locked_until_ts = 0.0
+
+    def _save_lock_state(self):
+        if not self.lock_file_path:
+            return
+        try:
+            with open(self.lock_file_path, "w", encoding="utf-8") as f:
+                json.dump({"locked_until": float(self.locked_until_ts)}, f)
         except Exception:
             pass
+
+    def get_lock_remaining(self) -> float:
+        now = time.time()
+        if self.locked_until_ts <= now:
+            if self.locked_until_ts != 0.0:
+                self.locked_until_ts = 0.0
+                self._save_lock_state()
+            return 0.0
+        return self.locked_until_ts - now
+
+    def is_locked(self) -> bool:
+        return self.get_lock_remaining() > 0.0
+
+    # ---------- کمک: تغییر اسکرین ریشه با جهت ----------
+    def _set_root_screen(self, name: str, direction: str = 'left'):
+        try:
+            sm = self.root
+            if not isinstance(sm, ScreenManager):
+                return
+            sm.transition = SlideTransition(direction=direction, duration=0.25)
+            sm.current = name
+        except Exception:
+            pass
+
+    def go_to_login(self):
+        # برگشت به لاگین: از بالا به پایین
+        self._set_root_screen('login', direction='down')
 
     def go_to_main(self):
-        try:
-            self.root.current = "main"
-        except Exception:
-            pass
+        # از لاگین به Main: از پایین به بالا
+        self._set_root_screen('main', direction='up')
 
     def go_to_password_settings(self):
-        try:
-            self.root.current = "pw"
-        except Exception:
-            pass
+        # از لاگین به صفحه‌ی تغییر پترن: از پایین به بالا
+        self._set_root_screen('pw', direction='up')
 
+    # ---------- لاجیک لاگین ----------
     def on_login_pattern(self, entered: Tuple[int, ...], lock: PatternLock):
+        # اگر در حالت قفل ۱ دقیقه‌ای هستیم، هیچ پترنی را قبول نکن
+        if self.is_locked():
+            lock.set_feedback("error")
+            Clock.schedule_once(lambda _dt: lock.reset(), 0.6)
+            return
+
         if not entered:
             lock.reset()
             return
@@ -1555,6 +1777,11 @@ class LanScannerApp(App):
         is_g = (entered == self.g_pattern)
 
         if is_m or is_g:
+            # موفق: تعداد خطاها ریست و قفل پاک
+            self.failed_attempts = 0
+            self.locked_until_ts = 0.0
+            self._save_lock_state()
+
             lock.set_feedback("success")
 
             def later(_dt):
@@ -1569,6 +1796,14 @@ class LanScannerApp(App):
 
             Clock.schedule_once(later, 1.0)
             return
+
+        # پترن اشتباه
+        self.failed_attempts += 1
+        if self.failed_attempts >= 3:
+            # قفل برای ۶۰ ثانیه
+            self.failed_attempts = 0
+            self.locked_until_ts = time.time() + 60.0
+            self._save_lock_state()
 
         lock.set_feedback("error")
         Clock.schedule_once(lambda _dt: lock.reset(), 1.0)
