@@ -100,7 +100,7 @@ fullscreen = 0
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,ACCESS_FINE_LOCATION
 
-
+android.fullscreen = 1
 # (list) features (adds uses-feature -tags to manifest)
 #android.features = android.hardware.usb.host
 
