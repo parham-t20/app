@@ -5,21 +5,8 @@ from uuid import uuid4
 from threading import Lock
 
 from kivy.utils import platform
-from kivy.config import Config
 
-# فقط روی دسکتاپ پنجره Kivy را 1x1 می‌کنیم
-if platform != "android":
-    Config.set("graphics", "width", "1")
-    Config.set("graphics", "height", "1")
-    Config.set("graphics", "borderless", "1")
-    Config.set("graphics", "resizable", "0")
-
-Config.set("kivy", "exit_on_escape", "1")
-
-from kivy.app import App
-from kivy.uix.widget import Widget
-
-
+# ---------- HTML/CSS/JS داخل خود پایتون ----------
 CSS = r"""
 :root{
   --bg:#0f172a; --panel:#111c36; --text:#e5e7eb; --muted:#9ca3af;
@@ -32,13 +19,11 @@ body{
   font-family:system-ui,Tahoma,sans-serif;
   background:var(--bg);
   color:var(--text);
-
-  /* فیت واقعی صفحه (بدون calc) */
   height: 100vh;
   height: 100dvh;
   display:flex;
   flex-direction:column;
-  overflow:hidden; /* مهم: اسکرول فقط داخل chat باشد */
+  overflow:hidden;
 }
 
 .topbar{
@@ -173,16 +158,14 @@ async function send(){
   if(hasPywebview()){
     txtMessage.value = "";
     txtMessage.focus();
-
     const res = await window.pywebview.api.send_message(text);
     if(res && res.ok){
       res.messages.forEach(m => appendMessage(m.from, m.text, m.ts * 1000));
     }
   }else{
-    // اندروید
+    // اندروید: با scheme به پایتون می‌فرستیم
     txtMessage.value = "";
     txtMessage.focus();
-
     appendMessage("me", text, Date.now());
     window.location.href = "app://send?text=" + encodeURIComponent(text);
   }
@@ -236,6 +219,7 @@ HTML = f"""<!doctype html>
 """
 
 
+# ---------- هسته پیام‌رسان ----------
 class MessengerCore:
     def __init__(self):
         self._lock = Lock()
@@ -265,6 +249,7 @@ class MessengerCore:
         return msg_me, msg_bot
 
 
+# ---------- Desktop: pywebview API ----------
 class DesktopAPI:
     def __init__(self, core: MessengerCore):
         self.core = core
@@ -283,35 +268,70 @@ class DesktopAPI:
         return {"ok": True, "messages": [me, bot]}
 
 
-class Root(Widget):
-    pass
+def start_desktop_webview():
+    import webview
+    core = MessengerCore()
+    api = DesktopAPI(core)
+
+    webview.create_window(
+        title="Messenger",
+        html=HTML,
+        js_api=api,
+        width=420,
+        height=720,
+        resizable=True,
+    )
+    webview.start(debug=False)
 
 
-class MessengerApp(App):
+# ---------- Kivy App (هم دسکتاپ هم اندروید نمایش داده می‌شود) ----------
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.metrics import dp
+from kivy.clock import Clock
+
+
+class RootUI(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(orientation="vertical", **kwargs)
+
+        self.topbar = BoxLayout(size_hint_y=None, height=dp(46), padding=(dp(10), 0))
+        self.topbar.add_widget(Label(text="Kivy (این پنجره باید دیده شود)", halign="right"))
+        self.btn_exit = Button(text="خروج", size_hint_x=None, width=dp(90))
+        self.topbar.add_widget(self.btn_exit)
+
+        self.add_widget(self.topbar)
+        self.add_widget(Label(text="(پیام‌رسان در WebView اجرا می‌شود)", size_hint_y=1))
+
+
+class MainApp(App):
     def build(self):
         self.core = MessengerCore()
-        return Root()
+        root = RootUI()
+        root.btn_exit.bind(on_release=lambda *_: self.stop())
+        self.root_ui = root
+        return root
 
     def on_start(self):
         if platform == "android":
-            self._start_android_webview()
+            # بعد از اینکه Kivy اندازه‌ها را ست کرد، WebView را زیر topbar اضافه می‌کنیم
+            Clock.schedule_once(lambda *_: self._start_android_webview(), 0)
         else:
-            self._start_desktop_pywebview()
+            # دسکتاپ: برای اینکه Kivy هم نمایش داده شود، WebView را جدا اجرا می‌کنیم (پنجره دوم)
+            from multiprocessing import Process
+            self._p = Process(target=start_desktop_webview, daemon=True)
+            self._p.start()
 
-    def _start_desktop_pywebview(self):
-        import webview
-
-        api = DesktopAPI(self.core)
-        webview.create_window(
-            title="Messenger",
-            html=HTML,
-            js_api=api,
-            width=420,
-            height=720,
-            resizable=True,
-        )
-        webview.start(debug=False)
-        self.stop()
+    def on_stop(self):
+        # دسکتاپ: اگر WebView process باز است ببندیم
+        if platform != "android":
+            try:
+                if hasattr(self, "_p") and self._p.is_alive():
+                    self._p.terminate()
+            except Exception:
+                pass
 
     def _start_android_webview(self):
         from jnius import autoclass, PythonJavaClass, java_method
@@ -319,19 +339,21 @@ class MessengerApp(App):
 
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         WebView = autoclass("android.webkit.WebView")
-        ViewGroupLayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
+        RelativeLayoutParams = autoclass("android.widget.RelativeLayout$LayoutParams")
         View = autoclass("android.view.View")
         WindowManagerLayoutParams = autoclass("android.view.WindowManager$LayoutParams")
 
         activity = PythonActivity.mActivity
         app_self = self
 
+        top_margin = int(self.root_ui.topbar.height)  # px
+
         def js_string(s: str) -> str:
             return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
         @run_on_ui_thread
         def create_webview():
-            # 1) فول‌اسکرین/Immersive (روی سامسونگ خیلی کمک می‌کند)
+            # fullscreen (کمک می‌کند فضای بالا/پایین کمتر شود)
             try:
                 window = activity.getWindow()
                 window.addFlags(WindowManagerLayoutParams.FLAG_FULLSCREEN)
@@ -355,14 +377,10 @@ class MessengerApp(App):
             settings.setJavaScriptEnabled(True)
             settings.setDomStorageEnabled(True)
 
-            # 2) مهم: داخل layout خود Kivy اضافه می‌کنیم تا دقیقاً تمام صفحه را بگیرد
-            try:
-                wv.setLayoutParams(ViewGroupLayoutParams(
-                    ViewGroupLayoutParams.MATCH_PARENT,
-                    ViewGroupLayoutParams.MATCH_PARENT
-                ))
-            except Exception:
-                pass
+            # Layout: زیر نوار Kivy (top_margin)
+            lp = RelativeLayoutParams(-1, -1)  # MATCH_PARENT, MATCH_PARENT
+            lp.setMargins(0, top_margin, 0, 0)
+            wv.setLayoutParams(lp)
 
             class Client(PythonJavaClass):
                 __javainterfaces__ = ["android/webkit/WebViewClient"]
@@ -399,19 +417,19 @@ class MessengerApp(App):
             wv.setWebViewClient(Client())
             wv.loadDataWithBaseURL("https://app.local/", HTML, "text/html", "utf-8", None)
 
-            # به جای addContentView:
-            # layout اصلی Kivy (mLayout) را می‌گیریم و WebView را اضافه می‌کنیم
-            layout = activity.mLayout
-            layout.addView(
-                wv,
-                ViewGroupLayoutParams(
-                    ViewGroupLayoutParams.MATCH_PARENT,
-                    ViewGroupLayoutParams.MATCH_PARENT
-                )
-            )
+            # داخل همان Activity اضافه می‌شود (Kivy هم بالای صفحه دیده می‌شود)
+            activity.mLayout.addView(wv, lp)
 
         create_webview()
 
 
 if __name__ == "__main__":
-    MessengerApp().run()
+    # برای ویندوز (multiprocessing)
+    if platform != "android":
+        try:
+            from multiprocessing import freeze_support
+            freeze_support()
+        except Exception:
+            pass
+
+    MainApp().run()
