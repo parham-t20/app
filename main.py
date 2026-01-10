@@ -1,19 +1,23 @@
+# -*- coding: utf-8 -*-
 import time
 import urllib.parse
 from uuid import uuid4
 from threading import Lock
 
-from kivy.app import App
-from kivy.uix.widget import Widget
 from kivy.utils import platform
 from kivy.config import Config
 
-# چون UI اصلی ما WebView است، پنجره Kivy را کوچک می‌کنیم
-Config.set("graphics", "width", "1")
-Config.set("graphics", "height", "1")
-Config.set("graphics", "borderless", "1")
-Config.set("graphics", "resizable", "0")
+# فقط روی دسکتاپ پنجره Kivy را 1x1 می‌کنیم
+if platform != "android":
+    Config.set("graphics", "width", "1")
+    Config.set("graphics", "height", "1")
+    Config.set("graphics", "borderless", "1")
+    Config.set("graphics", "resizable", "0")
+
 Config.set("kivy", "exit_on_escape", "1")
+
+from kivy.app import App
+from kivy.uix.widget import Widget
 
 
 CSS = r"""
@@ -22,20 +26,93 @@ CSS = r"""
   --me:#1d4ed8; --bot:#1f2937; --border:rgba(255,255,255,.10);
 }
 *{box-sizing:border-box}
-html,body{height:100%; margin:0; font-family:system-ui,Tahoma,sans-serif; background:var(--bg); color:var(--text)}
-.topbar{height:56px; padding:0 12px; display:flex; align-items:center; justify-content:space-between;
-  border-bottom:1px solid var(--border); background:rgba(255,255,255,.02)}
+html,body{height:100%; margin:0}
+
+body{
+  font-family:system-ui,Tahoma,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+
+  /* فیت واقعی صفحه (بدون calc) */
+  height: 100vh;
+  height: 100dvh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden; /* مهم: اسکرول فقط داخل chat باشد */
+}
+
+.topbar{
+  flex:0 0 auto;
+  height:56px;
+  padding:0 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  border-bottom:1px solid var(--border);
+  background:rgba(255,255,255,.02);
+}
 .title{font-weight:700}
-.chat{height:calc(100% - 56px - 68px); overflow-y:auto; padding:14px 12px; display:flex; flex-direction:column; gap:10px}
-.row{display:flex} .row.me{justify-content:flex-start} .row.bot{justify-content:flex-end}
-.bubble{max-width:82%; padding:10px 12px; border-radius:14px; border:1px solid var(--border); line-height:1.6;
-  white-space:pre-wrap; word-break:break-word}
-.bubble.me{background:rgba(29,78,216,.55)} .bubble.bot{background:var(--bot)}
-.meta{margin-top:6px; font-size:12px; color:var(--muted)}
-.composer{height:68px; padding:10px 12px; display:grid; grid-template-columns:1fr auto; gap:10px;
-  border-top:1px solid var(--border); background:rgba(255,255,255,.02)}
-.input{border:1px solid var(--border); border-radius:12px; padding:12px; background:var(--panel); color:var(--text); outline:none}
-.btn{border:1px solid var(--border); border-radius:12px; padding:10px 14px; background:#16a34a; color:#fff; cursor:pointer; font-weight:700}
+
+.chat{
+  flex:1 1 auto;
+  overflow-y:auto;
+  -webkit-overflow-scrolling: touch;
+  padding:14px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.row{display:flex}
+.row.me{justify-content:flex-start}
+.row.bot{justify-content:flex-end}
+
+.bubble{
+  max-width:82%;
+  padding:10px 12px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  line-height:1.6;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.bubble.me{background:rgba(29,78,216,.55)}
+.bubble.bot{background:var(--bot)}
+
+.meta{
+  margin-top:6px;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.composer{
+  flex:0 0 auto;
+  min-height:68px;
+  padding:10px 12px;
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:10px;
+  border-top:1px solid var(--border);
+  background:rgba(255,255,255,.02);
+}
+
+.input{
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:12px;
+  background:var(--panel);
+  color:var(--text);
+  outline:none;
+}
+.btn{
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:10px 14px;
+  background:#16a34a;
+  color:#fff;
+  cursor:pointer;
+  font-weight:700;
+}
 .btn.secondary{background:transparent; color:var(--text)}
 """
 
@@ -48,14 +125,12 @@ const btnClear = document.getElementById("btnClear");
 function hasPywebview(){
   return (window.pywebview && window.pywebview.api);
 }
-
 function formatTime(tsMs){
   try{
     const d = new Date(tsMs);
     return d.toLocaleTimeString("fa-IR", {hour:"2-digit", minute:"2-digit"});
   }catch(e){ return ""; }
 }
-
 function appendMessage(from, text, tsMs){
   const row = document.createElement("div");
   row.className = "row " + (from === "me" ? "me" : "bot");
@@ -74,11 +149,10 @@ function appendMessage(from, text, tsMs){
   bubble.appendChild(meta);
   row.appendChild(bubble);
   chat.appendChild(row);
-
   chat.scrollTop = chat.scrollHeight;
 }
 
-// پایتون (اندروید) این تابع را صدا می‌زند
+// اندروید: پایتون این را صدا می‌زند
 window.receiveFromPython = function(text){
   appendMessage("bot", text, Date.now());
 }
@@ -97,7 +171,6 @@ async function send(){
   if(!text) return;
 
   if(hasPywebview()){
-    // دسکتاپ: از API نتیجه می‌گیریم و خودمان UI را می‌سازیم
     txtMessage.value = "";
     txtMessage.focus();
 
@@ -106,7 +179,7 @@ async function send(){
       res.messages.forEach(m => appendMessage(m.from, m.text, m.ts * 1000));
     }
   }else{
-    // اندروید: اول پیام خود کاربر را نشان می‌دهیم، بعد با scheme می‌فرستیم
+    // اندروید
     txtMessage.value = "";
     txtMessage.focus();
 
@@ -128,13 +201,11 @@ btnClear.addEventListener("click", async ()=>{
   }
 });
 
-// دسکتاپ: وقتی pywebview آماده شد تاریخچه را بگیر
 document.addEventListener("pywebviewready", async ()=>{
   await loadHistoryDesktop();
   txtMessage.focus();
 });
 
-// اندروید: فوکوس ساده
 setTimeout(()=>txtMessage.focus(), 300);
 """
 
@@ -142,7 +213,7 @@ HTML = f"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Messenger</title>
   <style>{CSS}</style>
 </head>
@@ -195,7 +266,6 @@ class MessengerCore:
 
 
 class DesktopAPI:
-    # برای pywebview (دسکتاپ)
     def __init__(self, core: MessengerCore):
         self.core = core
 
@@ -249,22 +319,50 @@ class MessengerApp(App):
 
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         WebView = autoclass("android.webkit.WebView")
-        LayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
+        ViewGroupLayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
+        View = autoclass("android.view.View")
+        WindowManagerLayoutParams = autoclass("android.view.WindowManager$LayoutParams")
 
         activity = PythonActivity.mActivity
         app_self = self
 
-        def _js_string(s: str) -> str:
+        def js_string(s: str) -> str:
             return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
         @run_on_ui_thread
         def create_webview():
+            # 1) فول‌اسکرین/Immersive (روی سامسونگ خیلی کمک می‌کند)
+            try:
+                window = activity.getWindow()
+                window.addFlags(WindowManagerLayoutParams.FLAG_FULLSCREEN)
+                decor = window.getDecorView()
+                flags = (
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                )
+                decor.setSystemUiVisibility(flags)
+            except Exception:
+                pass
+
             wv = WebView(activity)
             app_self.webview = wv
 
             settings = wv.getSettings()
             settings.setJavaScriptEnabled(True)
             settings.setDomStorageEnabled(True)
+
+            # 2) مهم: داخل layout خود Kivy اضافه می‌کنیم تا دقیقاً تمام صفحه را بگیرد
+            try:
+                wv.setLayoutParams(ViewGroupLayoutParams(
+                    ViewGroupLayoutParams.MATCH_PARENT,
+                    ViewGroupLayoutParams.MATCH_PARENT
+                ))
+            except Exception:
+                pass
 
             class Client(PythonJavaClass):
                 __javainterfaces__ = ["android/webkit/WebViewClient"]
@@ -283,7 +381,7 @@ class MessengerApp(App):
 
                             me, bot = app_self.core.send(text)
                             if bot is not None:
-                                js = f"window.receiveFromPython({_js_string(bot['text'])});"
+                                js = f"window.receiveFromPython({js_string(bot['text'])});"
                                 try:
                                     view.evaluateJavascript(js, None)
                                 except Exception:
@@ -301,9 +399,15 @@ class MessengerApp(App):
             wv.setWebViewClient(Client())
             wv.loadDataWithBaseURL("https://app.local/", HTML, "text/html", "utf-8", None)
 
-            activity.addContentView(
+            # به جای addContentView:
+            # layout اصلی Kivy (mLayout) را می‌گیریم و WebView را اضافه می‌کنیم
+            layout = activity.mLayout
+            layout.addView(
                 wv,
-                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+                ViewGroupLayoutParams(
+                    ViewGroupLayoutParams.MATCH_PARENT,
+                    ViewGroupLayoutParams.MATCH_PARENT
+                )
             )
 
         create_webview()
