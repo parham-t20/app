@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = Lan Scanner2
+title = Reminder
 
 # (str) Package name
-package.name = LanScanner2
+package.name = reminder
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.example
@@ -37,7 +37,7 @@ version = 0.1
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,pyjnius,android
+requirements = python3,kivy,pyjnius,plyer,arabic-reshaper,python-bidi
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
