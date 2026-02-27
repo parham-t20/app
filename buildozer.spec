@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = Reminder
+title = Downloader
 
 # (str) Package name
-package.name = reminder
+package.name = downloader
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.example
@@ -37,20 +37,21 @@ version = 0.1
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,pyjnius,plyer,arabic-reshaper,python-bidi
+
+requirements = python3,kivy,yt-dlp,certifi,brotli,mutagen,pycryptodomex,websockets
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-presplash.filename = %(source.dir)s/WIFI2.png
+presplash.filename = %(source.dir)s/download.png
 
 # (str) Icon of the application
-icon.filename = %(source.dir)s/WIFI2.png
+icon.filename = %(source.dir)s/download.png
 
 # (str) Android presplash image
-android.presplash = %(source.dir)s/WIFI2.png
+android.presplash = %(source.dir)s/download.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
@@ -98,7 +99,9 @@ fullscreen = 0
 
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,ACCESS_FINE_LOCATION
+
+
+android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
 android.fullscreen = 1
 # (list) features (adds uses-feature -tags to manifest)
