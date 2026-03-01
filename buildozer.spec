@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = My Application
+title = Kivy Viewer
 
 # (str) Package name
-package.name = myapp
+package.name = KivyViewer
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test
@@ -44,10 +44,10 @@ requirements = python3,kivy,yt-dlp,plyer
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-#presplash.filename = %(source.dir)s/data/presplash.png
+presplash.filename = %(source.dir)s/data.png
 
 # (str) Icon of the application
-#icon.filename = %(source.dir)s/data/icon.png
+icon.filename = %(source.dir)s/data.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
