@@ -1,685 +1,640 @@
-import os
-import re
-import shutil
-import threading
-from threading import Event
-
-from kivy.app import App
-from kivy.clock import Clock
-from kivy.lang import Builder
-from kivy.properties import (
-    StringProperty,
-    NumericProperty,
-    BooleanProperty,
-    ListProperty,
-)
-from kivy.metrics import dp
-from kivy.utils import platform
-
-
-KV = r"""
-BoxLayout:
-    orientation: "vertical"
-    padding: dp(16)
-    spacing: dp(12)
-
-    canvas.before:
-        Color:
-            rgba: (0.07, 0.08, 0.11, 1)
-        Rectangle:
-            pos: self.pos
-            size: self.size
-
-    Label:
-        text: "Video Downloader"
-        font_size: "24sp"
-        bold: True
-        color: (1, 1, 1, 1)
-        size_hint_y: None
-        height: dp(40)
-
-    BoxLayout:
-        size_hint_y: None
-        height: dp(52)
-        spacing: dp(10)
-
-        TextInput:
-            id: url_input
-            hint_text: "Paste Instagram or YouTube URL"
-            multiline: False
-            write_tab: False
-            cursor_color: (1, 1, 1, 1)
-            foreground_color: (1, 1, 1, 1)
-            background_color: (0.12, 0.14, 0.19, 1)
-            padding: [dp(12), dp(14), dp(12), dp(14)]
-            disabled: app.is_downloading
-            on_text: app.on_url_text(self.text)
-
-        Button:
-            text: "Paste"
-            size_hint_x: None
-            width: dp(88)
-            on_release: app.paste_url()
-            disabled: app.is_downloading
-            background_normal: ""
-            background_color: (0.22, 0.26, 0.35, 1)
-            color: (1, 1, 1, 1)
-
-    BoxLayout:
-        size_hint_y: None
-        height: dp(44)
-        spacing: dp(10)
-
-        Label:
-            text: "Quality"
-            size_hint_x: None
-            width: dp(70)
-            color: (0.85, 0.85, 0.85, 1)
-            halign: "left"
-            valign: "middle"
-            text_size: self.size
-
-        Spinner:
-            id: quality_spinner
-            text: app.quality_spinner_text
-            values: app.quality_labels
-            disabled: (not app.is_youtube) or app.is_downloading or app.is_fetching_qualities
-            on_text: app.on_quality_selected(self.text)
-            background_normal: ""
-            background_color: (0.12, 0.14, 0.19, 1)
-            color: (1, 1, 1, 1)
-
-    Label:
-        text: app.status_text
-        color: (0.85, 0.85, 0.85, 1)
-        text_size: self.width, None
-        halign: "left"
-        valign: "middle"
-        size_hint_y: None
-        height: dp(46)
-
-    ProgressBar:
-        max: 100
-        value: app.progress
-        size_hint_y: None
-        height: dp(10)
-
-    Label:
-        text: app.progress_text
-        color: (0.92, 0.92, 0.92, 1)
-        text_size: self.width, None
-        halign: "left"
-        valign: "middle"
-        size_hint_y: None
-        height: dp(24)
-
-    BoxLayout:
-        size_hint_y: None
-        height: dp(52)
-        spacing: dp(12)
-
-        Button:
-            text: "Abort"
-            disabled: not app.is_downloading
-            on_release: app.abort_download()
-            background_normal: ""
-            background_color: (0.86, 0.22, 0.22, 1)
-            color: (1, 1, 1, 1)
-
-        Button:
-            text: "Just Audio (M4A)"
-            disabled: (not app.is_youtube) or app.is_downloading
-            on_release: app.start_audio_download()
-            background_normal: ""
-            background_color: (0.25, 0.75, 0.45, 1)
-            color: (1, 1, 1, 1)
-
-        Button:
-            text: "Download"
-            disabled: app.is_downloading
-            on_release: app.start_video_download()
-            background_normal: ""
-            background_color: (0.18, 0.62, 0.90, 1)
-            color: (1, 1, 1, 1)
-
-    Label:
-        text: 
-        font_size: "12sp"
-        color: (0.62, 0.62, 0.62, 1)
-        text_size: self.width, None
-        halign: "left"
-        valign: "top"
+"""
+Mobile App File - Smart app with persistent settings
+Automatically detects platform and saves server URL
+Run: python mobile_app.py
 """
 
+from kivy.app import App
+from kivy.lang import Builder
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from kivy.uix.popup import Popup
+from kivy.uix.scrollview import ScrollView
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.graphics import Color, Rectangle
+from kivy.utils import get_color_from_hex, platform
+from kivy.metrics import dp
 
-def safe_one_line(s: str, max_len: int = 180) -> str:
-    s = (s or "").strip().replace("\n", " ")
-    s = re.sub(r"\s+", " ", s)
-    return s[:max_len]
+import json
+import threading
+import urllib.request
+import ssl
+import os
+
+# ============================================
+# PLATFORM DETECTION
+# ============================================
+IS_ANDROID = platform == 'android'
+IS_IOS = platform == 'ios'
+IS_MOBILE = IS_ANDROID or IS_IOS
+IS_DESKTOP = not IS_MOBILE
+
+print(f"Platform: {platform}")
+print(f"Is Mobile: {IS_MOBILE}")
+print(f"Is Desktop: {IS_DESKTOP}")
+
+# ============================================
+# STORAGE CONFIGURATION
+# ============================================
+if IS_ANDROID:
+    from android.storage import app_storage_path
+    STORAGE_PATH = app_storage_path()
+elif IS_IOS:
+    from kivy.utils import platform
+    import os
+    STORAGE_PATH = os.path.expanduser('~/Documents')
+else:
+    # Desktop (Windows, Linux, Mac)
+    STORAGE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_FILE = os.path.join(STORAGE_PATH, 'app_config.json')
+
+print(f"Storage path: {STORAGE_PATH}")
+print(f"Config file: {CONFIG_FILE}")
+
+# ============================================
+# DEFAULT SERVER URL
+# ============================================
+DEFAULT_SERVER_URL = "https://689vk46r-5000.euw.devtunnels.ms"
+FETCH_INTERVAL = 5  # seconds
+
+# ============================================
 
 
-def human_bytes(n: float) -> str:
+def hex_to_kivy(hex_color, alpha=1.0):
+    """Convert hex to Kivy color"""
     try:
-        n = float(n)
-    except Exception:
-        return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB"]
-    i = 0
-    while n >= 1024 and i < len(units) - 1:
-        n /= 1024.0
-        i += 1
-    if i == 0:
-        return f"{int(n)} {units[i]}"
-    return f"{n:.1f} {units[i]}"
+        hex_color = hex_color.lstrip('#')
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+        return (r, g, b, alpha)
+    except:
+        return (1, 1, 1, alpha)
 
 
-def is_youtube_url(url: str) -> bool:
-    u = (url or "").lower()
-    return ("youtube.com" in u) or ("youtu.be" in u)
+class ConfigManager:
+    """Manages app configuration"""
+    
+    @staticmethod
+    def load_config():
+        """Load configuration from file"""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    print(f"Config loaded from: {CONFIG_FILE}")
+                    return config
+        except Exception as e:
+            print(f"Error loading config: {e}")
+        
+        # Return default config
+        return {
+            "server_url": DEFAULT_SERVER_URL,
+            "fetch_interval": FETCH_INTERVAL
+        }
+    
+    @staticmethod
+    def save_config(config):
+        """Save configuration to file"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            
+            print(f"Config saved to: {CONFIG_FILE}")
+            return True
+        except Exception as e:
+            print(f"Error saving config: {e}")
+            return False
 
 
-def is_instagram_url(url: str) -> bool:
-    u = (url or "").lower()
-    return "instagram.com" in u
-
-
-class VideoDownloaderApp(App):
-    status_text = StringProperty("Ready.")
-    progress_text = StringProperty("0%")
-    progress = NumericProperty(0.0)
-    is_downloading = BooleanProperty(False)
-
-    download_dir = StringProperty("")
-
-    # YouTube qualities UI
-    is_youtube = BooleanProperty(False)
-    is_fetching_qualities = BooleanProperty(False)
-    quality_labels = ListProperty(["Best Available"])
-    quality_spinner_text = StringProperty("Best Available")
-
+class AppLoader(BoxLayout):
+    """Loads and manages the dynamic app"""
+    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.abort_event = Event()
-        self._dl_thread = None
-
-        self._current_filename = None
-        self._current_tmpfilename = None
-
-        self._quality_map = {"Best Available": None}
-        self._selected_format_id = None
-
-        self._last_url = ""
-        self._fetch_trigger = Clock.create_trigger(self._debounced_fetch_qualities, 0.6)
-        self._fetch_thread = None
-        self._fetch_cancel_token = 0
-
-    def build(self):
-        self.title = "Video Downloader"
-        self.download_dir = self._get_download_dir()
-        os.makedirs(self.download_dir, exist_ok=True)
-        return Builder.load_string(KV)
-
-    def on_start(self):
-        if platform == "android":
+        self.orientation = 'vertical'
+        self.last_python_code = ""
+        self.current_app = None
+        
+        # Load config
+        self.config = ConfigManager.load_config()
+        self.server_url = self.config.get("server_url", DEFAULT_SERVER_URL)
+        self.fetch_interval = self.config.get("fetch_interval", FETCH_INTERVAL)
+        
+        print(f"Server URL: {self.server_url}")
+        print(f"Fetch interval: {self.fetch_interval}s")
+        
+        # Background
+        with self.canvas.before:
+            Color(0.07, 0.08, 0.11, 1)
+            self._bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+        
+        # Create header
+        self._create_header()
+        
+        # App container
+        self.app_container = BoxLayout(orientation='vertical')
+        self.add_widget(self.app_container)
+        
+        # Show loading
+        self._show_loading()
+        
+        # Start fetching
+        Clock.schedule_once(lambda dt: self.fetch_app(), 1)
+        self.fetch_schedule = Clock.schedule_interval(
+            lambda dt: self.fetch_app(silent=True), 
+            self.fetch_interval
+        )
+    
+    def _update_bg(self, *args):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+    
+    def _create_header(self):
+        """Create header"""
+        header = BoxLayout(
+            size_hint=(1, None),
+            height=dp(55),
+            padding=[dp(15), dp(10)],
+            spacing=dp(10)
+        )
+        
+        with header.canvas.before:
+            Color(0.1, 0.11, 0.14, 1)
+            self._header_bg = Rectangle(pos=header.pos, size=header.size)
+        header.bind(
+            pos=lambda *a: setattr(self._header_bg, 'pos', header.pos),
+            size=lambda *a: setattr(self._header_bg, 'size', header.size)
+        )
+        
+        # Title
+        self.title_label = Label(
+            text='Dynamic App',
+            font_size='16sp',
+            color=get_color_from_hex('#e94560'),
+            bold=True,
+            size_hint=(0.5, 1),
+            halign='left'
+        )
+        self.title_label.bind(size=self.title_label.setter('text_size'))
+        header.add_widget(self.title_label)
+        
+        # Status indicator
+        self.status_label = Label(
+            text='...',
+            font_size='14sp',
+            color=get_color_from_hex('#888888'),
+            size_hint=(0.2, 1)
+        )
+        header.add_widget(self.status_label)
+        
+        # Refresh button
+        refresh_btn = Button(
+            text='Refresh',
+            font_size='14sp',
+            size_hint=(0.15, 1),
+            background_color=hex_to_kivy('#0f3460'),
+            background_normal='',
+            on_press=lambda x: self.fetch_app()
+        )
+        header.add_widget(refresh_btn)
+        
+        # Settings button
+        settings_btn = Button(
+            text='Settings',
+            font_size='14sp',
+            size_hint=(0.15, 1),
+            background_color=hex_to_kivy('#e94560'),
+            background_normal='',
+            on_press=lambda x: self._show_settings()
+        )
+        header.add_widget(settings_btn)
+        
+        self.add_widget(header)
+    
+    def _show_loading(self):
+        """Show loading screen"""
+        self.app_container.clear_widgets()
+        
+        box = BoxLayout(orientation='vertical', padding=dp(30), spacing=dp(20))
+        
+        box.add_widget(Label(
+            text='Loading',
+            font_size='60sp',
+            size_hint_y=None,
+            height=dp(100),
+            color=get_color_from_hex('#00d9ff')
+        ))
+        
+        box.add_widget(Label(
+            text='Connecting to server...',
+            font_size='18sp',
+            color=get_color_from_hex('#888888')
+        ))
+        
+        box.add_widget(Label(
+            text=f'Server: {self.server_url}',
+            font_size='12sp',
+            color=get_color_from_hex('#555555')
+        ))
+        
+        box.add_widget(Label(
+            text=f'Platform: {platform}',
+            font_size='12sp',
+            color=get_color_from_hex('#555555')
+        ))
+        
+        self.app_container.add_widget(box)
+    
+    def _show_error(self, error_msg):
+        """Show error"""
+        self.app_container.clear_widgets()
+        
+        scroll = ScrollView()
+        box = BoxLayout(
+            orientation='vertical', 
+            padding=dp(30), 
+            spacing=dp(15),
+            size_hint_y=None
+        )
+        box.bind(minimum_height=box.setter('height'))
+        
+        box.add_widget(Label(
+            text='ERROR',
+            font_size='50sp',
+            size_hint_y=None,
+            height=dp(80),
+            color=get_color_from_hex('#e94560')
+        ))
+        
+        box.add_widget(Label(
+            text='Failed to Load App',
+            font_size='20sp',
+            color=get_color_from_hex('#ff6b81'),
+            size_hint_y=None,
+            height=dp(40)
+        ))
+        
+        error_label = Label(
+            text=error_msg,
+            font_size='13sp',
+            color=get_color_from_hex('#cccccc'),
+            size_hint_y=None,
+            text_size=(Window.width - dp(60), None),
+            halign='left'
+        )
+        error_label.bind(texture_size=error_label.setter('size'))
+        box.add_widget(error_label)
+        
+        tips = Label(
+            text='Tips:\n• Check if server is running\n• Verify server URL in settings\n• Check network connection\n• Server must be accessible from this device',
+            font_size='12sp',
+            color=get_color_from_hex('#888888'),
+            size_hint_y=None,
+            height=dp(120),
+            halign='left',
+            text_size=(Window.width - dp(60), None)
+        )
+        box.add_widget(tips)
+        
+        retry_btn = Button(
+            text='Retry Connection',
+            size_hint=(0.7, None),
+            height=dp(50),
+            pos_hint={'center_x': 0.5},
+            background_color=hex_to_kivy('#0f3460'),
+            background_normal='',
+            on_press=lambda x: self.fetch_app()
+        )
+        box.add_widget(retry_btn)
+        
+        settings_btn = Button(
+            text='Open Settings',
+            size_hint=(0.7, None),
+            height=dp(50),
+            pos_hint={'center_x': 0.5},
+            background_color=hex_to_kivy('#e94560'),
+            background_normal='',
+            on_press=lambda x: self._show_settings()
+        )
+        box.add_widget(settings_btn)
+        
+        scroll.add_widget(box)
+        self.app_container.add_widget(scroll)
+    
+    def fetch_app(self, silent=False):
+        """Fetch app from server"""
+        if not silent:
+            self.status_label.text = 'Loading...'
+            self.status_label.color = get_color_from_hex('#00d9ff')
+        
+        def _fetch():
             try:
-                from android.permissions import request_permissions, Permission
-                perms = [
-                    Permission.INTERNET,
-                    Permission.READ_EXTERNAL_STORAGE,
-                    Permission.WRITE_EXTERNAL_STORAGE,
-                ]
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                
+                url = f"{self.server_url}/api/app"
+                req = urllib.request.Request(url)
+                req.add_header('User-Agent', 'KivyMobileApp/3.0')
+                
+                with urllib.request.urlopen(req, timeout=10, context=context) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                
+                kv_code = data.get('kv_code', '')
+                python_code = data.get('python_code', '')
+                app_class_name = data.get('app_class_name', '')
+                
+                # Check if Python code changed
+                if python_code != self.last_python_code:
+                    self.last_python_code = python_code
+                    Clock.schedule_once(
+                        lambda dt: self._load_app(kv_code, python_code, app_class_name)
+                    )
+                    print(f"App updated from server")
+                
+                Clock.schedule_once(lambda dt: self._set_status('Connected', '#00ff88'))
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"Fetch error: {error_msg}")
+                
+                if not silent:
+                    Clock.schedule_once(lambda dt: self._show_error(error_msg))
+                
+                Clock.schedule_once(lambda dt: self._set_status('Error', '#e94560'))
+        
+        thread = threading.Thread(target=_fetch, daemon=True)
+        thread.start()
+    
+    def _load_app(self, kv_code, python_code, app_class_name):
+        """Load and execute the app"""
+        try:
+            print(f"Loading app: {app_class_name}")
+            
+            # Clear container
+            self.app_container.clear_widgets()
+            
+            # Stop previous app if exists
+            if self.current_app:
                 try:
-                    perms.append(Permission.POST_NOTIFICATIONS)
-                except Exception:
+                    self.current_app.stop()
+                except:
                     pass
-                request_permissions(perms)
-            except Exception:
-                pass
-
-    def _get_download_dir(self) -> str:
-        try:
-            from plyer import storagepath
-            d = storagepath.get_downloads_dir()
-            if d:
-                return d
-        except Exception:
-            pass
-
-        if platform == "android":
-            try:
-                from jnius import autoclass
-                Environment = autoclass("android.os.Environment")
-                d = Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_DOWNLOADS
-                ).getAbsolutePath()
-                if d:
-                    return d
-            except Exception:
-                pass
-
-        return os.path.join(os.path.expanduser("~"), "Downloads")
-
-    def _ui_set(self, *, status=None, progress=None, progress_text=None, downloading=None):
-        def _apply(_dt):
-            if status is not None:
-                self.status_text = status
-            if progress is not None:
-                self.progress = float(progress)
-            if progress_text is not None:
-                self.progress_text = progress_text
-            if downloading is not None:
-                self.is_downloading = bool(downloading)
-        Clock.schedule_once(_apply, 0)
-
-    def _clear_url_input(self):
-        def _apply(_dt):
-            try:
-                self.root.ids.url_input.text = ""
-            except Exception:
-                pass
-        Clock.schedule_once(_apply, 0)
-
-    def _notify(self, title: str, message: str):
-        try:
-            from plyer import notification
-            notification.notify(
-                title=title,
-                message=message,
-                app_name="Video Downloader",
-                timeout=6,
-            )
-        except Exception:
-            pass
-
-    def paste_url(self):
-        try:
-            from plyer import clipboard
-            txt = clipboard.paste() or ""
-        except Exception:
-            txt = ""
-        txt = txt.strip()
-
-        if not txt:
-            self._ui_set(status="Clipboard is empty.")
-            return
-
-        try:
-            self.root.ids.url_input.text = txt
-        except Exception:
-            pass
-
-    # ---------------- URL / Qualities ----------------
-    def on_url_text(self, text: str):
-        if self.is_downloading:
-            return
-
-        url = (text or "").strip()
-        if not url:
-            self.is_youtube = False
-            self._reset_qualities()
-            return
-
-        if is_instagram_url(url):
-            self.is_youtube = False
-            self._reset_qualities()
-            return
-
-        if is_youtube_url(url):
-            self.is_youtube = True
-            if url != self._last_url:
-                self._last_url = url
-                self._fetch_trigger()
-        else:
-            self.is_youtube = False
-            self._reset_qualities()
-
-    def _reset_qualities(self):
-        self._quality_map = {"Best Available": None}
-        self._selected_format_id = None
-        self.quality_labels = ["Best Available"]
-        self.quality_spinner_text = "Best Available"
-        self.is_fetching_qualities = False
-
-    def on_quality_selected(self, label: str):
-        self._selected_format_id = self._quality_map.get(label)
-        self.quality_spinner_text = label
-
-    def _debounced_fetch_qualities(self, _dt):
-        url = (self._last_url or "").strip()
-        if not (self.is_youtube and url):
-            return
-        if self.is_fetching_qualities:
-            return
-
-        self.is_fetching_qualities = True
-        self._ui_set(status="Reading available qualities...")
-
-        self._fetch_cancel_token += 1
-        token = self._fetch_cancel_token
-
-        self._fetch_thread = threading.Thread(
-            target=self._fetch_qualities_worker, args=(url, token), daemon=True
-        )
-        self._fetch_thread.start()
-
-    def _fetch_qualities_worker(self, url: str, token: int):
-        try:
-            import yt_dlp
-
-            if token != self._fetch_cancel_token:
-                return
-
-            opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "noplaylist": True,
+            
+            # Execute Python code
+            namespace = {
+                'App': App,
+                'StringProperty': __import__('kivy.properties', fromlist=['StringProperty']).StringProperty,
+                'NumericProperty': __import__('kivy.properties', fromlist=['NumericProperty']).NumericProperty,
+                'BooleanProperty': __import__('kivy.properties', fromlist=['BooleanProperty']).BooleanProperty,
+                'ListProperty': __import__('kivy.properties', fromlist=['ListProperty']).ListProperty,
+                'ObjectProperty': __import__('kivy.properties', fromlist=['ObjectProperty']).ObjectProperty,
+                'Clock': Clock,
+                'Clipboard': __import__('kivy.core.clipboard', fromlist=['Clipboard']).Clipboard,
             }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-            if isinstance(info, dict) and info.get("entries"):
-                info = info["entries"][0]
-
-            formats = (info or {}).get("formats") or []
-
-            # ============ فقط فرمت‌های PROGRESSIVE (ویدیو + صدا با هم) ============
-            progressive_formats = []
             
-            for f in formats:
-                if not isinstance(f, dict):
-                    continue
-                
-                # باید هم ویدیو داشته باشد هم صدا
-                vcodec = f.get("vcodec")
-                acodec = f.get("acodec")
-                
-                if not vcodec or vcodec == "none":
-                    continue
-                if not acodec or acodec == "none":
-                    continue
-                
-                height = f.get("height") or 0
-                if height < 144:
-                    continue
-                
-                ext = (f.get("ext") or "").lower()
-                fps = f.get("fps") or 30
-                fmt_id = f.get("format_id")
-                if not fmt_id:
-                    continue
-                
-                filesize = f.get("filesize") or f.get("filesize_approx") or 0
-                tbr = f.get("tbr") or f.get("vbr") or 0
-                
-                # ترجیح: MP4 > WEBM
-                format_priority = 2 if ext == "mp4" else (1 if ext == "webm" else 0)
-                
-                progressive_formats.append({
-                    "height": height,
-                    "ext": ext,
-                    "fps": fps,
-                    "fmt_id": fmt_id,
-                    "filesize": filesize,
-                    "tbr": tbr,
-                    "format_priority": format_priority,
-                })
+            exec(python_code, namespace)
             
-            # گروه‌بندی براساس کیفیت (height)
-            quality_groups = {}
-            for fmt in progressive_formats:
-                h = fmt["height"]
-                if h not in quality_groups:
-                    quality_groups[h] = []
-                quality_groups[h].append(fmt)
-            
-            # برای هر کیفیت بهترین فرمت را انتخاب کن
-            items = []
-            for height in sorted(quality_groups.keys(), reverse=True):
-                # مرتب‌سازی: MP4 اولویت دارد، سپس بیترت بالاتر
-                fmts = sorted(
-                    quality_groups[height],
-                    key=lambda x: (x["format_priority"], x["tbr"]),
-                    reverse=True
-                )
-                best = fmts[0]
-                
-                label = f"{best['height']}p"
-                
-                # افزودن FPS اگر بالای 30 باشد
-                if best['fps'] and int(best['fps']) > 30:
-                    label += f" {int(best['fps'])}fps"
-                
-                label += f" {best['ext'].upper()}"
-                
-                # افزودن حجم فایل
-                if best['filesize']:
-                    label += f" • {human_bytes(best['filesize'])}"
-                elif best['tbr']:
-                    # تخمین حجم براساس بیترت (فقط نمایشی)
-                    # فرض: ویدیو 3 دقیقه‌ای
-                    estimated = (best['tbr'] * 1024 * 180) / 8
-                    label += f" • ~{human_bytes(estimated)}"
-                
-                items.append((best['height'], label, best['fmt_id']))
-            
-            # محدود کردن به 25 گزینه
-            items = items[:25]
-            
-            new_map = {"Best Available": "best[ext=mp4]/best"}
-            new_labels = ["Best Available"]
-            
-            for _h, label, fmt_id in items:
-                # جلوگیری از تکرار
-                counter = 1
-                original_label = label
-                while label in new_map:
-                    counter += 1
-                    label = f"{original_label} ({counter})"
-                
-                new_map[label] = fmt_id
-                new_labels.append(label)
-
-            def _apply(_dt):
-                if not self.is_youtube or (self._last_url.strip() != url.strip()):
-                    self.is_fetching_qualities = False
-                    return
-
-                self._quality_map = new_map
-                self.quality_labels = new_labels
-                self.quality_spinner_text = "Best Available"
-                self._selected_format_id = None
-                self.is_fetching_qualities = False
-                
-                if len(new_labels) > 1:
-                    self._ui_set(status=f"Found {len(new_labels)-1} progressive qualities. Select and download.")
-                else:
-                    self._ui_set(status="Only auto quality available for this video.")
-
-            Clock.schedule_once(_apply, 0)
-
-        except Exception as e:
-            msg = safe_one_line(str(e))
-            def _apply(_dt):
-                self.is_fetching_qualities = False
-                self._reset_qualities()
-                self._ui_set(status=f"Could not fetch qualities: {msg}")
-            Clock.schedule_once(_apply, 0)
-
-    # ---------------- Download actions ----------------
-    def start_video_download(self):
-        url = ""
-        try:
-            url = (self.root.ids.url_input.text or "").strip()
-        except Exception:
-            pass
-
-        if not url:
-            self._ui_set(status="Please paste a URL first.")
-            return
-        if self.is_downloading:
-            self._ui_set(status="A download is already running.")
-            return
-
-        self._start_download(url, mode="video")
-
-    def start_audio_download(self):
-        url = ""
-        try:
-            url = (self.root.ids.url_input.text or "").strip()
-        except Exception:
-            pass
-
-        if not url:
-            self._ui_set(status="Please paste a URL first.")
-            return
-        if not self.is_youtube:
-            self._ui_set(status="Audio download is only for YouTube URLs.")
-            return
-        if self.is_downloading:
-            self._ui_set(status="A download is already running.")
-            return
-
-        self._start_download(url, mode="audio_m4a")
-
-    def abort_download(self):
-        if not self.is_downloading:
-            return
-        self.abort_event.set()
-        self._ui_set(status="Abort requested...")
-
-    def _start_download(self, url: str, mode: str):
-        self.abort_event.clear()
-        self._current_filename = None
-        self._current_tmpfilename = None
-
-        self._ui_set(
-            status="Starting download...",
-            progress=0,
-            progress_text="0%",
-            downloading=True,
-        )
-
-        self._dl_thread = threading.Thread(
-            target=self._download_worker, args=(url, mode), daemon=True
-        )
-        self._dl_thread.start()
-
-    # ---------------- yt-dlp helpers ----------------
-    def _cleanup_partials(self):
-        candidates = set()
-        if self._current_filename:
-            candidates.add(self._current_filename)
-            candidates.add(self._current_filename + ".part")
-            candidates.add(self._current_filename + ".ytdl")
-        if self._current_tmpfilename:
-            candidates.add(self._current_tmpfilename)
-            candidates.add(self._current_tmpfilename + ".part")
-            candidates.add(self._current_tmpfilename + ".ytdl")
-
-        for p in candidates:
-            try:
-                if p and os.path.exists(p):
-                    os.remove(p)
-            except Exception:
-                pass
-
-    def _progress_hook(self, d: dict):
-        if self.abort_event.is_set():
-            try:
-                import yt_dlp
-                raise yt_dlp.utils.DownloadCancelled()
-            except Exception:
-                raise Exception("Download cancelled")
-
-        status = d.get("status")
-        self._current_filename = d.get("filename") or self._current_filename
-        self._current_tmpfilename = d.get("tmpfilename") or self._current_tmpfilename
-
-        if status == "downloading":
-            downloaded = d.get("downloaded_bytes") or 0
-            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            speed = d.get("speed") or 0
-
-            pct = (downloaded / total * 100.0) if total else 0.0
-
-            text = f"{pct:5.1f}%  |  {human_bytes(downloaded)}"
-            if total:
-                text += f" / {human_bytes(total)}"
-            if speed:
-                text += f"  |  {human_bytes(speed)}/s"
-
-            self._ui_set(
-                status="Downloading...",
-                progress=pct if total else self.progress,
-                progress_text=text,
-            )
-
-        elif status == "finished":
-            self._ui_set(status="Finalizing...", progress_text="Processing...")
-
-    def _download_worker(self, url: str, mode: str):
-        try:
-            import yt_dlp
-
-            outtmpl = os.path.join(self.download_dir, "%(title).120s.%(ext)s")
-
-            ydl_opts = {
-                "outtmpl": outtmpl,
-                "noplaylist": True,
-                "retries": 3,
-                "quiet": True,
-                "no_warnings": True,
-                "progress_hooks": [self._progress_hook],
-            }
-
-            if mode == "video":
-                if self.is_youtube and self._selected_format_id:
-                    # استفاده از فرمت انتخابی کاربر
-                    ydl_opts["format"] = self._selected_format_id
-                else:
-                    # پیش‌فرض: بهترین فرمت progressive (MP4 در اولویت)
-                    ydl_opts["format"] = "best[ext=mp4]/best"
-
-            elif mode == "audio_m4a":
-                # دانلود فقط صدا (بدون نیاز به ffmpeg - فرمت M4A)
-                ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio"
-                ydl_opts["postprocessors"] = []
-
+            # Get app class
+            if app_class_name and app_class_name in namespace:
+                AppClass = namespace[app_class_name]
             else:
-                raise ValueError("Unknown download mode")
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-
-            title = safe_one_line((info or {}).get("title") or "Media")
-
-            self._ui_set(
-                status="Download complete!",
-                progress=100,
-                progress_text="100%",
-                downloading=False,
-            )
-            self._notify("Download complete", title)
-            self._clear_url_input()
-
+                raise Exception(f"App class '{app_class_name}' not found")
+            
+            # Create app instance
+            self.current_app = AppClass()
+            
+            # Build UI from KV code
+            if kv_code:
+                root_widget = Builder.load_string(kv_code)
+                self.current_app.root = root_widget
+            else:
+                raise Exception("No KV code provided")
+            
+            # Add to container
+            self.app_container.add_widget(root_widget)
+            
+            # Start the app
+            try:
+                self.current_app.on_start()
+            except:
+                pass
+            
+            print(f"App loaded successfully")
+            
         except Exception as e:
-            if self.abort_event.is_set():
-                self._cleanup_partials()
-                self._ui_set(
-                    status="Aborted. Partial files removed.",
-                    progress=0,
-                    progress_text="0%",
-                    downloading=False,
+            error_msg = str(e)
+            print(f"Load error: {error_msg}")
+            self._show_error(f"Failed to load app:\n\n{error_msg}")
+    
+    def _set_status(self, text, color):
+        """Set status"""
+        self.status_label.text = text
+        self.status_label.color = get_color_from_hex(color)
+    
+    def _show_settings(self):
+        """Show settings popup"""
+        content = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
+        
+        # Title
+        content.add_widget(Label(
+            text='App Settings',
+            font_size='20sp',
+            color=get_color_from_hex('#e94560'),
+            bold=True,
+            size_hint_y=None,
+            height=dp(40)
+        ))
+        
+        # Platform info
+        platform_info = f"Platform: {platform}\n"
+        platform_info += f"Mobile: {'Yes' if IS_MOBILE else 'No'}\n"
+        platform_info += f"Storage: {STORAGE_PATH}"
+        
+        content.add_widget(Label(
+            text=platform_info,
+            font_size='12sp',
+            color=get_color_from_hex('#888888'),
+            size_hint_y=None,
+            height=dp(80)
+        ))
+        
+        # Server URL
+        content.add_widget(Label(
+            text='Server URL:',
+            size_hint_y=None,
+            height=dp(30),
+            font_size='14sp',
+            halign='left'
+        ))
+        
+        url_input = TextInput(
+            text=self.server_url,
+            size_hint_y=None,
+            height=dp(50),
+            multiline=False,
+            font_size='13sp',
+            background_color=hex_to_kivy('#0f0f23'),
+            foreground_color=hex_to_kivy('#ffffff'),
+            cursor_color=hex_to_kivy('#e94560')
+        )
+        content.add_widget(url_input)
+        
+        # Fetch interval
+        content.add_widget(Label(
+            text='Auto-refresh interval (seconds):',
+            size_hint_y=None,
+            height=dp(30),
+            font_size='14sp',
+            halign='left'
+        ))
+        
+        interval_input = TextInput(
+            text=str(self.fetch_interval),
+            size_hint_y=None,
+            height=dp(50),
+            multiline=False,
+            font_size='13sp',
+            input_filter='int',
+            background_color=hex_to_kivy('#0f0f23'),
+            foreground_color=hex_to_kivy('#ffffff'),
+            cursor_color=hex_to_kivy('#e94560')
+        )
+        content.add_widget(interval_input)
+        
+        # Info label
+        info_label = Label(
+            text=f'Current: {self.server_url}\nConfig file: {CONFIG_FILE}',
+            font_size='11sp',
+            color=get_color_from_hex('#666666'),
+            size_hint_y=None,
+            height=dp(60)
+        )
+        content.add_widget(info_label)
+        
+        # Buttons
+        btn_box = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
+        
+        def save_settings(instance):
+            new_url = url_input.text.strip().rstrip('/')
+            new_interval = int(interval_input.text) if interval_input.text.isdigit() else 5
+            
+            if new_url and new_url != self.server_url:
+                self.server_url = new_url
+                self.config['server_url'] = new_url
+                print(f"Server URL changed to: {new_url}")
+            
+            if new_interval != self.fetch_interval:
+                self.fetch_interval = new_interval
+                self.config['fetch_interval'] = new_interval
+                
+                # Reschedule fetch
+                Clock.unschedule(self.fetch_schedule)
+                self.fetch_schedule = Clock.schedule_interval(
+                    lambda dt: self.fetch_app(silent=True),
+                    self.fetch_interval
                 )
-                self._clear_url_input()
-                return
+                print(f"Fetch interval changed to: {new_interval}s")
+            
+            # Save config
+            if ConfigManager.save_config(self.config):
+                info_label.text = 'Settings saved successfully!'
+                info_label.color = get_color_from_hex('#00ff88')
+                Clock.schedule_once(lambda dt: popup.dismiss(), 1)
+                Clock.schedule_once(lambda dt: self.fetch_app(), 1.5)
+            else:
+                info_label.text = 'Error saving settings!'
+                info_label.color = get_color_from_hex('#e94560')
+        
+        save_btn = Button(
+            text='Save',
+            background_color=hex_to_kivy('#00ff88'),
+            background_normal='',
+            color=get_color_from_hex('#000000'),
+            on_press=save_settings
+        )
+        btn_box.add_widget(save_btn)
+        
+        def test_connection(instance):
+            test_url = url_input.text.strip().rstrip('/')
+            info_label.text = 'Testing connection...'
+            info_label.color = get_color_from_hex('#00d9ff')
+            
+            def _test():
+                try:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    
+                    url = f"{test_url}/api/health"
+                    req = urllib.request.Request(url)
+                    
+                    with urllib.request.urlopen(req, timeout=5, context=context) as response:
+                        data = json.loads(response.read().decode('utf-8'))
+                        msg = f'Connection successful!\nStatus: {data.get("status")}'
+                        Clock.schedule_once(lambda dt: setattr(info_label, 'text', msg))
+                        Clock.schedule_once(lambda dt: setattr(info_label, 'color', get_color_from_hex('#00ff88')))
+                
+                except Exception as e:
+                    msg = f'Connection failed:\n{str(e)[:50]}'
+                    Clock.schedule_once(lambda dt: setattr(info_label, 'text', msg))
+                    Clock.schedule_once(lambda dt: setattr(info_label, 'color', get_color_from_hex('#e94560')))
+            
+            threading.Thread(target=_test, daemon=True).start()
+        
+        test_btn = Button(
+            text='Test',
+            background_color=hex_to_kivy('#0f3460'),
+            background_normal='',
+            on_press=test_connection
+        )
+        btn_box.add_widget(test_btn)
+        
+        close_btn = Button(
+            text='Close',
+            background_color=hex_to_kivy('#e94560'),
+            background_normal='',
+            on_press=lambda x: popup.dismiss()
+        )
+        btn_box.add_widget(close_btn)
+        
+        content.add_widget(btn_box)
+        
+        popup = Popup(
+            title='Settings',
+            content=content,
+            size_hint=(0.95, 0.85) if IS_MOBILE else (0.6, 0.7),
+            separator_color=hex_to_kivy('#e94560')
+        )
+        popup.open()
 
-            msg = safe_one_line(str(e), 220)
-            self._ui_set(
-                status=f"Error: {msg}",
-                downloading=False,
-            )
+
+class MobileAppRunner(App):
+    """Main runner app"""
+    
+    def build(self):
+        self.title = 'Dynamic Mobile App'
+        Window.clearcolor = get_color_from_hex('#0d1117')
+        return AppLoader()
 
 
-if __name__ == "__main__":
-    VideoDownloaderApp().run()
+if __name__ == '__main__':
+    print("=" * 70)
+    print("Dynamic Mobile App Starting...")
+    print("=" * 70)
+    print(f"Platform: {platform}")
+    print(f"Storage: {STORAGE_PATH}")
+    print(f"Config: {CONFIG_FILE}")
+    print("=" * 70)
+    print()
+    
+    MobileAppRunner().run()
