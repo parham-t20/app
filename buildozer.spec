@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = Video Downloader
+title = Kivy Viewer
 
 # (str) Package name
-package.name = VideoDownloader
+package.name = KivyViewer
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test
@@ -45,10 +45,10 @@ requirements = python3,kivy,yt-dlp,plyer,pyjnius
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-presplash.filename = %(source.dir)s/download.png
+presplash.filename = %(source.dir)s/data.png
 
 # (str) Icon of the application
-icon.filename = %(source.dir)s/download.png
+icon.filename = %(source.dir)s/data.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
