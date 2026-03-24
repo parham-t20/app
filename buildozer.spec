@@ -1,10 +1,10 @@
 [app]
 
 # (str) Title of your application
-title = Kivy Viewer
+title = Music
 
 # (str) Package name
-package.name = KivyViewer
+package.name = musicer
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test
@@ -13,7 +13,7 @@ package.domain = org.test
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,kv,ttf,png,jpg,jpeg,gif,mp3,wav,ogg,m4a
 
 # (list) List of inclusions using pattern matching
 #source.include_patterns = assets/*,images/*.png
@@ -38,17 +38,17 @@ version = 0.1
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
 
-requirements = python3,kivy,yt-dlp,plyer,pyjnius
+requirements = python3,kivy,ffpyplayer,pyjnius,arabic-reshaper,python-bidi
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-presplash.filename = %(source.dir)s/data.png
+presplash.filename = %(source.dir)s/music.png
 
 # (str) Icon of the application
-icon.filename = %(source.dir)s/data.png
+icon.filename = %(source.dir)s/music.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse or landscape-reverse
@@ -97,7 +97,7 @@ fullscreen = 0
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
 
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,POST_NOTIFICATIONS,READ_MEDIA_VIDEO,READ_MEDIA_AUDIO,FOREGROUND_SERVICE,ACCESS_NETWORK_STATE
+android.permissions = READ_EXTERNAL_STORAGE,READ_MEDIA_AUDIO
 
 # (list) features (adds uses-feature -tags to manifest)
 #android.features = android.hardware.usb.host
