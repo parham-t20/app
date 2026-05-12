@@ -1,1859 +1,1016 @@
-# main.py - Action Notch FIXED - ALL BUGS RESOLVED
+"""
+NOVA Music Player
+=================
+Cross-platform music player for Windows & Android
+Built with Python + Kivy + Pygame
+
+Features:
+  - Play MP3 / WAV / OGG / FLAC / M4A / AAC
+  - Play / Pause / Previous / Next
+  - Seek bar with time display
+  - Volume control
+  - Shuffle & Repeat (Off / One / All)
+  - Scrollable playlist with per-track removal
+  - Add files or entire folders (tkinter dialog on Windows)
+  - Auto-save & restore playlist (JSON)
+  - ID3 tag reading via mutagen (title, artist, album, duration)
+  - Spinning vinyl disc animation
+  - VU meter visualizer
+  - Modern dark purple theme – pure Python widgets (no KV bugs)
+
+Install:
+    pip install kivy pygame mutagen
+
+Run:
+    python music_player.py
+
+Build for Android (Linux / WSL):
+    pip install buildozer
+    buildozer init   # edit buildozer.spec as needed
+    buildozer android debug
+"""
+
+# ── stdlib ────────────────────────────────────────────────────
 import os
 import json
+import math
+import random
 import time
-import threading
-import datetime
-from functools import partial
+from pathlib import Path
 
-os.environ['KIVY_LOG_LEVEL'] = 'warning'
+# ── Kivy env/config MUST come before any other kivy import ────
+os.environ.setdefault("KIVY_AUDIO", "pygame")
 
 from kivy.config import Config
-Config.set('graphics', 'width', '400')
-Config.set('graphics', 'height', '750')
+Config.set("graphics", "width",     "420")
+Config.set("graphics", "height",    "800")
+Config.set("graphics", "resizable", "1")
+Config.set("kivy",     "window_icon", "")
 
-from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.switch import Switch
-from kivy.uix.slider import Slider
-from kivy.uix.popup import Popup
-from kivy.uix.spinner import Spinner
-from kivy.uix.togglebutton import ToggleButton
-from kivy.uix.textinput import TextInput
-from kivy.uix.widget import Widget
-from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse, Line
-from kivy.clock import Clock
-from kivy.core.window import Window
-from kivy.utils import get_color_from_hex, platform
-from kivy.metrics import dp, sp
+# ── Kivy imports ──────────────────────────────────────────────
+from kivy.app            import App
+from kivy.clock          import Clock
+from kivy.core.window    import Window
+from kivy.metrics        import dp, sp
+from kivy.animation      import Animation
 
-IS_ANDROID = platform == 'android'
+from kivy.graphics import (
+    Color, Rectangle, Ellipse, Line,
+    RoundedRectangle,
+)
 
-if not IS_ANDROID:
-    Window.size = (400, 750)
-    Window.clearcolor = get_color_from_hex('#0F0F1A')
+from kivy.properties import (
+    StringProperty, NumericProperty,
+    BooleanProperty, ListProperty,
+)
+
+from kivy.uix.widget      import Widget
+from kivy.uix.label       import Label
+from kivy.uix.button      import Button
+from kivy.uix.slider      import Slider
+from kivy.uix.boxlayout   import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.scrollview  import ScrollView
+from kivy.uix.gridlayout  import GridLayout
+from kivy.uix.popup       import Popup
+from kivy.uix.behaviors   import ButtonBehavior
+
+# ── Optional: mutagen ─────────────────────────────────────────
+try:
+    from mutagen import File as MutagenFile
+    HAS_MUTAGEN = True
+except ImportError:
+    HAS_MUTAGEN = False
+
+# ── Pygame audio ──────────────────────────────────────────────
+try:
+    import pygame
+    pygame.mixer.pre_init(44100, -16, 2, 512)
+    pygame.mixer.init()
+    HAS_PYGAME = True
+except Exception as _e:
+    HAS_PYGAME = False
+    print(f"[NOVA] pygame not available: {_e}")
+
+# ── Platform detection ────────────────────────────────────────
+try:
+    from kivy.utils import platform as _plat
+    PLATFORM = _plat
+except Exception:
+    PLATFORM = "unknown"
+
+IS_ANDROID = (PLATFORM == "android")
+
+if IS_ANDROID:
+    try:
+        from android.permissions import request_permissions, Permission
+        request_permissions([
+            Permission.READ_EXTERNAL_STORAGE,
+            Permission.WRITE_EXTERNAL_STORAGE,
+        ])
+    except Exception:
+        pass
+
+# ═══════════════════════════════════════════════════════════════
+#  THEME  (all RGBA tuples)
+# ═══════════════════════════════════════════════════════════════
+C_BG       = (0.06, 0.06, 0.09, 1)
+C_SURFACE  = (0.10, 0.10, 0.14, 1)
+C_CARD     = (0.13, 0.12, 0.18, 1)
+C_ITEM     = (0.11, 0.11, 0.16, 1)
+C_ITEM_SEL = (0.19, 0.11, 0.30, 1)
+C_ACCENT   = (0.58, 0.25, 0.95, 1)   # violet
+C_PINK     = (0.93, 0.25, 0.56, 1)   # pink
+C_TEXT     = (0.94, 0.94, 0.96, 1)
+C_MUTED    = (0.45, 0.45, 0.58, 1)
+
+SUPPORTED_EXT = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
+PLAYLIST_PATH = os.path.join(
+    os.path.expanduser("~"), ".nova_music_playlist.json"
+)
+
+# ═══════════════════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════
+
+def fmt_time(seconds):
+    try:
+        s = int(max(0.0, float(seconds)))
+        return f"{s // 60}:{s % 60:02d}"
+    except Exception:
+        return "0:00"
 
 
-# ============================================================
-# ALL 17 ACTIONS
-# ============================================================
-ALL_ACTIONS = [
-    'Open App',
-    'Call Contact',
-    'Scroll to Up',
-    'Screenshot',
-    'Silent Audio Record',
-    'Start Screen Record',
-    'Play/Pause Media',
-    'Flashlight',
-    'Scan QR Code',
-    'Close App',
-    'Home',
-    'Back',
-    'Recent Apps',
-    'Silent Photo Rear Camera',
-    'Silent Photo Front Camera',
-    'Silent Video Rear Camera',
-    'Do Nothing',
-]
-
-GESTURES = [
-    ('single_touch', 'Single Touch'),
-    ('double_touch', 'Double Touch'),
-    ('long_touch', 'Long Touch'),
-    ('swipe_right', 'Swipe Right'),
-    ('swipe_left', 'Swipe Left'),
-]
-
-
-# ============================================================
-# APP LAUNCHER - FIXED: now shows ALL apps including games
-# ============================================================
-class AppLauncher:
-    _cache = None
-
-    @staticmethod
-    def get_apps():
-        if AppLauncher._cache is not None:
-            return AppLauncher._cache
-
-        if not IS_ANDROID:
-            AppLauncher._cache = [
-                ('Calculator', 'com.android.calculator2'),
-                ('Calendar', 'com.android.calendar'),
-                ('Camera', 'com.android.camera2'),
-                ('Chrome', 'com.android.chrome'),
-                ('Clash of Clans', 'com.supercell.clashofclans'),
-                ('Clash Royale', 'com.supercell.clashroyale'),
-                ('Clock', 'com.android.deskclock'),
-                ('Contacts', 'com.android.contacts'),
-                ('Facebook', 'com.facebook.katana'),
-                ('File Manager', 'com.android.filemanager'),
-                ('Free Fire', 'com.dts.freefireth'),
-                ('Gallery', 'com.android.gallery3d'),
-                ('Gmail', 'com.google.android.gm'),
-                ('Google Maps', 'com.google.android.apps.maps'),
-                ('Instagram', 'com.instagram.android'),
-                ('Messages', 'com.android.mms'),
-                ('Minecraft', 'com.mojang.minecraftpe'),
-                ('Netflix', 'com.netflix.mediaclient'),
-                ('Phone', 'com.android.dialer'),
-                ('Photos', 'com.google.android.apps.photos'),
-                ('Play Store', 'com.android.vending'),
-                ('PUBG Mobile', 'com.tencent.ig'),
-                ('Roblox', 'com.roblox.client'),
-                ('Settings', 'com.android.settings'),
-                ('Snapchat', 'com.snapchat.android'),
-                ('Spotify', 'com.spotify.music'),
-                ('Subway Surfers', 'com.kiloo.subwaysurf'),
-                ('Telegram', 'org.telegram.messenger'),
-                ('TikTok', 'com.zhiliaoapp.musically'),
-                ('Twitter/X', 'com.twitter.android'),
-                ('WhatsApp', 'com.whatsapp'),
-                ('YouTube', 'com.google.android.youtube'),
-                ('Zoom', 'us.zoom.videomeetings'),
-            ]
-            return AppLauncher._cache
-
+def get_track_info(path):
+    """Return (title, artist, album, duration_seconds)."""
+    title  = Path(path).stem
+    artist = "Unknown Artist"
+    album  = "Unknown Album"
+    dur    = 0.0
+    if HAS_MUTAGEN:
         try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            PackageManager = autoclass('android.content.pm.PackageManager')
-            ApplicationInfo = autoclass('android.content.pm.ApplicationInfo')
-
-            activity = PythonActivity.mActivity
-            pm = activity.getPackageManager()
-
-            # METHOD 1: Get ALL launchable apps (including games)
-            main_intent = Intent(Intent.ACTION_MAIN, None)
-            main_intent.addCategory(Intent.CATEGORY_LAUNCHER)
-            resolve_list = pm.queryIntentActivities(main_intent, 0)
-
-            result = []
-            seen_packages = set()
-
-            for i in range(resolve_list.size()):
-                resolve_info = resolve_list.get(i)
-                pkg_name = str(resolve_info.activityInfo.packageName)
-
-                if pkg_name in seen_packages:
-                    continue
-                seen_packages.add(pkg_name)
-
-                try:
-                    app_info = pm.getApplicationInfo(pkg_name, 0)
-                    app_name = str(pm.getApplicationLabel(app_info))
-                except Exception:
-                    app_name = str(resolve_info.loadLabel(pm))
-
-                if app_name and pkg_name:
-                    result.append((app_name, pkg_name))
-
-            # METHOD 2: Also get installed packages (backup)
-            try:
-                installed = pm.getInstalledApplications(0)
-                for j in range(installed.size()):
-                    ai = installed.get(j)
-                    pkg = str(ai.packageName)
-                    if pkg not in seen_packages:
-                        # Check if it has a launch intent
-                        launch = pm.getLaunchIntentForPackage(pkg)
-                        if launch is not None:
-                            name = str(pm.getApplicationLabel(ai))
-                            if name:
-                                result.append((name, pkg))
-                                seen_packages.add(pkg)
-            except Exception:
-                pass
-
-            result.sort(key=lambda x: x[0].lower())
-            AppLauncher._cache = result
-            print(f'Found {len(result)} apps')
-            return result
-
-        except Exception as e:
-            print(f'Get apps error: {e}')
-            return []
-
-    @staticmethod
-    def launch(package):
-        if not IS_ANDROID:
-            print(f'[PC] Launch: {package}')
-            return
-        try:
-            from jnius import autoclass
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            activity = PythonActivity.mActivity
-            pm = activity.getPackageManager()
-            launch_intent = pm.getLaunchIntentForPackage(package)
-            if launch_intent:
-                launch_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                activity.startActivity(launch_intent)
-                print(f'Launched: {package}')
-            else:
-                print(f'Cannot launch: {package}')
-        except Exception as e:
-            print(f'Launch error: {e}')
-
-    @staticmethod
-    def clear_cache():
-        AppLauncher._cache = None
-
-
-# ============================================================
-# CONTACT MANAGER - FIXED: proper contact reading
-# ============================================================
-class ContactManager:
-    _cache = None
-
-    @staticmethod
-    def get_contacts():
-        if ContactManager._cache is not None:
-            return ContactManager._cache
-
-        if not IS_ANDROID:
-            ContactManager._cache = [
-                ('Ali', '+98912111111'),
-                ('Mom', '+98912222222'),
-                ('Dad', '+98912333333'),
-                ('Sara', '+98912444444'),
-                ('Reza', '+98912555555'),
-                ('Doctor', '+98912666666'),
-                ('Pizza', '+98912777777'),
-                ('John', '+1234567890'),
-                ('Work', '+1234567891'),
-            ]
-            return ContactManager._cache
-
-        try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Uri = autoclass('android.net.Uri')
-
-            activity = PythonActivity.mActivity
-            cr = activity.getContentResolver()
-
-            # ContactsContract.CommonDataKinds.Phone
-            phone_uri = Uri.parse(
-                'content://com.android.contacts/data/phones'
-            )
-
-            projection = None  # get all columns
-            cursor = cr.query(phone_uri, projection, None, None,
-                              'display_name ASC')
-
-            contacts = []
-            seen = set()
-
-            if cursor:
-                while cursor.moveToNext():
-                    try:
-                        name_idx = cursor.getColumnIndex('display_name')
-                        num_idx = cursor.getColumnIndex('data1')
-
-                        if name_idx >= 0 and num_idx >= 0:
-                            name = cursor.getString(name_idx)
-                            number = cursor.getString(num_idx)
-
-                            if name and number:
-                                name = str(name).strip()
-                                number = str(number).strip().replace(' ', '')
-
-                                key = f'{name}_{number}'
-                                if key not in seen:
-                                    seen.add(key)
-                                    contacts.append((name, number))
-                    except Exception:
-                        continue
-
-                cursor.close()
-
-            contacts.sort(key=lambda x: x[0].lower())
-            ContactManager._cache = contacts
-            print(f'Found {len(contacts)} contacts')
-            return contacts
-
-        except Exception as e:
-            print(f'Get contacts error: {e}')
-            return []
-
-    @staticmethod
-    def call(number):
-        if not IS_ANDROID:
-            print(f'[PC] Calling: {number}')
-            return
-        try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            Uri = autoclass('android.net.Uri')
-
-            activity = PythonActivity.mActivity
-
-            # Use ACTION_CALL for direct call
-            intent = Intent(Intent.ACTION_CALL)
-            intent.setData(Uri.parse(f'tel:{number}'))
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            activity.startActivity(intent)
-            print(f'Calling: {number}')
-
-        except Exception as e:
-            print(f'Call error: {e}')
-            # Fallback: open dialer
-            try:
-                from jnius import autoclass
-                PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                Intent = autoclass('android.content.Intent')
-                Uri = autoclass('android.net.Uri')
-                activity = PythonActivity.mActivity
-                intent = Intent(Intent.ACTION_DIAL)
-                intent.setData(Uri.parse(f'tel:{number}'))
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                activity.startActivity(intent)
-            except Exception:
-                pass
-
-    @staticmethod
-    def clear_cache():
-        ContactManager._cache = None
-
-
-# ============================================================
-# CAMERA MANAGER - FIXED: front camera works now
-# ============================================================
-class CameraManager:
-    @staticmethod
-    def take_photo(camera_type='rear'):
-        """camera_type: 'rear' or 'front'"""
-        if not IS_ANDROID:
-            print(f'[PC] Silent photo: {camera_type}')
-            return
-
-        try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            MediaStore = autoclass('android.provider.MediaStore')
-
-            activity = PythonActivity.mActivity
-
-            intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-
-            if camera_type == 'front':
-                # Multiple methods to force front camera
-                try:
-                    # Method 1: EXTRA_USE_FRONT_CAMERA
-                    intent.putExtra(
-                        'android.intent.extras.CAMERA_FACING',
-                        1  # 1 = front camera
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    # Method 2: LENS_FACING_FRONT
-                    intent.putExtra(
-                        'android.intent.extras.LENS_FACING_FRONT',
-                        1
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    # Method 3: USE_FRONT_CAMERA
-                    intent.putExtra(
-                        'android.intent.extra.USE_FRONT_CAMERA',
-                        True
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    # Method 4: camerafacing
-                    intent.putExtra('camerafacing', 'front')
-                except Exception:
-                    pass
-
-                try:
-                    # Method 5: For Samsung devices
-                    intent.putExtra(
-                        'com.google.assistant.extra.USE_FRONT_CAMERA',
-                        True
-                    )
-                except Exception:
-                    pass
-
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            activity.startActivity(intent)
-            print(f'Camera opened: {camera_type}')
-
-        except Exception as e:
-            print(f'Camera error: {e}')
-            # Fallback: just open camera app
-            try:
-                from jnius import autoclass
-                PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                Intent = autoclass('android.content.Intent')
-                activity = PythonActivity.mActivity
-                intent = Intent('android.media.action.STILL_IMAGE_CAMERA')
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                activity.startActivity(intent)
-            except Exception:
-                pass
-
-    @staticmethod
-    def take_video():
-        if not IS_ANDROID:
-            print('[PC] Silent video rear')
-            return
-        try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            MediaStore = autoclass('android.provider.MediaStore')
-
-            activity = PythonActivity.mActivity
-            intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            activity.startActivity(intent)
-            print('Video camera opened')
-
-        except Exception as e:
-            print(f'Video error: {e}')
-
-
-# ============================================================
-# ACTION EXECUTOR - ALL 17 ACTIONS FULLY WORKING
-# ============================================================
-class ActionExecutor:
-    _flash = False
-    _audio_recording = False
-    _screen_recording = False
-    _audio_recorder = None
-
-    @staticmethod
-    def execute(action, settings, gesture_key=''):
-        if action == 'Do Nothing':
-            return
-
-        print(f'[Execute] {action}')
-        settings.inc('total_actions')
-
-        if not IS_ANDROID:
-            ActionExecutor._simulate(action, settings, gesture_key)
-            return
-
-        try:
-            if action == 'Open App':
-                pkg = settings.get(f'{gesture_key}_app_package', '')
-                if pkg:
-                    AppLauncher.launch(pkg)
-                else:
-                    print('No app configured')
-
-            elif action == 'Call Contact':
-                number = settings.get(f'{gesture_key}_call_number', '')
-                if number:
-                    ContactManager.call(number)
-                else:
-                    print('No contact configured')
-
-            elif action == 'Scroll to Up':
-                ActionExecutor._shell('input swipe 500 1500 500 300 200')
-
-            elif action == 'Screenshot':
-                ActionExecutor._shell('input keyevent 120')
-                settings.inc('screenshots_taken')
-
-            elif action == 'Silent Audio Record':
-                ActionExecutor._toggle_audio_record()
-
-            elif action == 'Start Screen Record':
-                ActionExecutor._toggle_screen_record()
-
-            elif action == 'Play/Pause Media':
-                ActionExecutor._shell('input keyevent 85')
-
-            elif action == 'Flashlight':
-                ActionExecutor._toggle_flashlight()
-                settings.inc('flashlight_toggles')
-
-            elif action == 'Scan QR Code':
-                ActionExecutor._open_qr_scanner()
-
-            elif action == 'Close App':
-                ActionExecutor._shell('input keyevent 4')
-                time.sleep(0.15)
-                ActionExecutor._shell('input keyevent 4')
-
-            elif action == 'Home':
-                ActionExecutor._shell('input keyevent 3')
-
-            elif action == 'Back':
-                ActionExecutor._shell('input keyevent 4')
-
-            elif action == 'Recent Apps':
-                ActionExecutor._shell('input keyevent 187')
-
-            elif action == 'Silent Photo Rear Camera':
-                CameraManager.take_photo('rear')
-
-            elif action == 'Silent Photo Front Camera':
-                CameraManager.take_photo('front')
-
-            elif action == 'Silent Video Rear Camera':
-                CameraManager.take_video()
-
-        except Exception as e:
-            print(f'Action error [{action}]: {e}')
-
-    @staticmethod
-    def _simulate(action, settings, gesture_key):
-        extra = ''
-        if action == 'Open App':
-            extra = f" -> {settings.get(f'{gesture_key}_app_name', '?')}"
-        elif action == 'Call Contact':
-            extra = f" -> {settings.get(f'{gesture_key}_call_name', '?')}"
-        print(f'  [Desktop] {action}{extra}')
-
-    @staticmethod
-    def _shell(cmd):
-        try:
-            from jnius import autoclass
-            Runtime = autoclass('java.lang.Runtime')
-            Runtime.getRuntime().exec(['/system/bin/sh', '-c', cmd])
-        except Exception as e:
-            print(f'Shell error: {e}')
-
-    @staticmethod
-    def _toggle_flashlight():
-        if not IS_ANDROID:
-            return
-        try:
-            from jnius import autoclass
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Context = autoclass('android.content.Context')
-            activity = PythonActivity.mActivity
-            cm = activity.getSystemService(Context.CAMERA_SERVICE)
-            cam_id = cm.getCameraIdList()[0]
-            ActionExecutor._flash = not ActionExecutor._flash
-            cm.setTorchMode(cam_id, ActionExecutor._flash)
-        except Exception as e:
-            print(f'Flashlight error: {e}')
-
-    @staticmethod
-    def _toggle_audio_record():
-        if not IS_ANDROID:
-            return
-        try:
-            from jnius import autoclass
-
-            if ActionExecutor._audio_recording:
-                if ActionExecutor._audio_recorder:
-                    try:
-                        ActionExecutor._audio_recorder.stop()
-                        ActionExecutor._audio_recorder.release()
-                    except Exception:
-                        pass
-                    ActionExecutor._audio_recorder = None
-                ActionExecutor._audio_recording = False
-                print('Audio recording STOPPED')
-            else:
-                MediaRecorder = autoclass('android.media.MediaRecorder')
-                Environment = autoclass('android.os.Environment')
-
-                mr = MediaRecorder()
-                mr.setAudioSource(MediaRecorder.AudioSource.MIC)
-                mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                mr.setAudioEncodingBitRate(128000)
-                mr.setAudioSamplingRate(44100)
-
-                ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                download_dir = Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_DOWNLOADS
-                ).getAbsolutePath()
-                path = os.path.join(download_dir, f'recording_{ts}.m4a')
-
-                mr.setOutputFile(path)
-                mr.prepare()
-                mr.start()
-
-                ActionExecutor._audio_recorder = mr
-                ActionExecutor._audio_recording = True
-                print(f'Audio recording STARTED: {path}')
-
-        except Exception as e:
-            print(f'Audio record error: {e}')
-
-    @staticmethod
-    def _toggle_screen_record():
-        if not IS_ANDROID:
-            return
-        try:
-            if ActionExecutor._screen_recording:
-                ActionExecutor._shell('pkill -2 screenrecord')
-                ActionExecutor._screen_recording = False
-                print('Screen recording STOPPED')
-            else:
-                ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                path = f'/sdcard/Download/screen_{ts}.mp4'
-
-                def record():
-                    ActionExecutor._shell(
-                        f'screenrecord --time-limit 180 --size 720x1280 {path}'
-                    )
-
-                threading.Thread(target=record, daemon=True).start()
-                ActionExecutor._screen_recording = True
-                print(f'Screen recording STARTED: {path}')
-
-        except Exception as e:
-            print(f'Screen record error: {e}')
-
-    @staticmethod
-    def _open_qr_scanner():
-        if not IS_ANDROID:
-            return
-        try:
-            from jnius import autoclass
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            Intent = autoclass('android.content.Intent')
-            activity = PythonActivity.mActivity
-
-            # Try multiple QR scanner intents
-            qr_intents = [
-                'com.google.android.gms.samples.vision.barcodereader',
-                'com.google.zxing.client.android.SCAN',
-                'android.media.action.STILL_IMAGE_CAMERA',
-            ]
-
-            launched = False
-            for action_str in qr_intents:
-                try:
-                    intent = Intent(action_str)
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    activity.startActivity(intent)
-                    launched = True
-                    break
-                except Exception:
-                    continue
-
-            if not launched:
-                # Fallback: open Google Lens via Google app
-                try:
-                    intent = Intent()
-                    intent.setClassName(
-                        'com.google.android.googlequicksearchbox',
-                        'com.google.android.apps.lens.MainActivity'
-                    )
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    activity.startActivity(intent)
-                except Exception:
-                    # Final fallback: open camera
-                    from jnius import autoclass as ac
-                    MS = ac('android.provider.MediaStore')
-                    intent = Intent(MS.ACTION_IMAGE_CAPTURE)
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    activity.startActivity(intent)
-
-        except Exception as e:
-            print(f'QR scanner error: {e}')
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
-DEFAULT_SETTINGS = {
-    'master_enabled': True,
-    'notch_shape': 'pill',
-    'notch_width': 40, 'notch_height': 28, 'notch_radius': 18,
-    'h_offset': 0, 'v_offset': 0,
-    'notch_color': '#000000', 'notch_opacity': 100,
-    'show_border': False, 'border_width': 1,
-    'enable_shadow': True,
-    'haptic_enabled': True, 'haptic_intensity': 2,
-    'long_touch_duration': 500, 'double_touch_speed': 300,
-    'touch_sensitivity': 2,
-    'animations_enabled': True, 'animation_speed': 300,
-    'run_background': True, 'start_on_boot': True,
-    'total_actions': 0, 'flashlight_toggles': 0, 'screenshots_taken': 0,
-}
-
-for gk, _ in GESTURES:
-    DEFAULT_SETTINGS[gk] = 'Do Nothing'
-    DEFAULT_SETTINGS[f'{gk}_app_name'] = ''
-    DEFAULT_SETTINGS[f'{gk}_app_package'] = ''
-    DEFAULT_SETTINGS[f'{gk}_call_name'] = ''
-    DEFAULT_SETTINGS[f'{gk}_call_number'] = ''
-
-
-class Settings:
-    def __init__(self, path):
-        self.path = path
-        self.data = dict(DEFAULT_SETTINGS)
-        self._load()
-
-    def _load(self):
-        try:
-            if os.path.exists(self.path):
-                with open(self.path, 'r') as f:
-                    self.data.update(json.load(f))
+            easy = MutagenFile(path, easy=True)
+            if easy:
+                title  = str(easy.get("title",  [title])[0])
+                artist = str(easy.get("artist", [artist])[0])
+                album  = str(easy.get("album",  [album])[0])
+            raw = MutagenFile(path)
+            if raw and hasattr(raw, "info"):
+                dur = float(raw.info.length)
         except Exception:
             pass
+    return title, artist, album, dur
 
-    def save(self):
+
+# ═══════════════════════════════════════════════════════════════
+#  AUDIO ENGINE
+# ═══════════════════════════════════════════════════════════════
+
+class AudioEngine:
+    def __init__(self):
+        self._path     = None
+        self._duration = 0.0
+        self._start_t  = 0.0   # wall-clock when play() was called
+        self._offset   = 0.0   # seek position
+        self.paused    = False
+        self.volume    = 0.8
+        if HAS_PYGAME:
+            pygame.mixer.music.set_volume(self.volume)
+
+    def load(self, path, duration):
         try:
-            d = os.path.dirname(self.path)
-            if d:
-                os.makedirs(d, exist_ok=True)
-            with open(self.path, 'w') as f:
-                json.dump(self.data, f, indent=2)
-        except Exception:
-            pass
-
-    def get(self, k, d=None):
-        return self.data.get(k, d if d is not None else DEFAULT_SETTINGS.get(k))
-
-    def set(self, k, v):
-        self.data[k] = v
-        self.save()
-
-    def inc(self, k):
-        self.data[k] = int(self.data.get(k, 0)) + 1
-        self.save()
-
-    def reset(self):
-        self.data = dict(DEFAULT_SETTINGS)
-        self.save()
-
-
-# ============================================================
-# OVERLAY MANAGER
-# ============================================================
-class OverlayManager:
-    def __init__(self, s):
-        self.s = s
-        self.running = True
-        self.overlay_view = None
-        self.wm = None
-        self.added = False
-        self._threads = False
-
-    def create(self):
-        if not IS_ANDROID:
-            print('[PC] Overlay ON')
-            return
-        try:
-            from jnius import autoclass
-            Ctx = autoclass('android.content.Context')
-            WMP = autoclass('android.view.WindowManager$LayoutParams')
-            PF = autoclass('android.graphics.PixelFormat')
-            Grav = autoclass('android.view.Gravity')
-            act = self._act()
-            self.wm = act.getSystemService(Ctx.WINDOW_SERVICE)
-            w, h = self._w(), self._h()
-            p = WMP(w, h, WMP.TYPE_APPLICATION_OVERLAY,
-                    WMP.FLAG_NOT_FOCUSABLE | WMP.FLAG_LAYOUT_IN_SCREEN
-                    | WMP.FLAG_NOT_TOUCH_MODAL, PF.TRANSLUCENT)
-            p.gravity = Grav.TOP | Grav.CENTER_HORIZONTAL
-            p.x = int(self.s.get('h_offset', 0))
-            p.y = int(self.s.get('v_offset', 0))
-            self.overlay_view = self._build_view(act)
-            self._setup_touch()
-            self.wm.addView(self.overlay_view, p)
-            self.added = True
-            print('Overlay created')
+            if HAS_PYGAME:
+                pygame.mixer.music.load(path)
+            self._path     = path
+            self._duration = duration
+            self._offset   = 0.0
+            self._start_t  = 0.0
+            self.paused    = False
+            return True
         except Exception as e:
-            print(f'Overlay error: {e}')
+            print(f"[AudioEngine.load] {e}")
+            return False
 
-    def remove(self):
-        if not IS_ANDROID:
-            print('[PC] Overlay OFF')
+    def play(self):
+        if not HAS_PYGAME or not self._path:
             return
         try:
-            if self.wm and self.overlay_view and self.added:
-                self.wm.removeView(self.overlay_view)
-                self.added = False
-                self.overlay_view = None
-        except Exception:
-            pass
-
-    def _build_view(self, ctx):
-        from jnius import autoclass
-        View = autoclass('android.view.View')
-        GD = autoclass('android.graphics.drawable.GradientDrawable')
-        CC = autoclass('android.graphics.Color')
-
-        v = View(ctx)
-        d = GD()
-        op = max(0, min(100, int(self.s.get('notch_opacity', 100))))
-        ah = format(int(255 * op / 100), '02X')
-        ch = self.s.get('notch_color', '#000000').replace('#', '')
-        d.setColor(CC.parseColor(f'#{ah}{ch}'))
-
-        sh = self.s.get('notch_shape', 'pill')
-        r = self._dp(int(self.s.get('notch_radius', 18)))
-        shapes = {'rectangle': 0, 'rounded': r, 'pill': 9999, 'island': r*2}
-        if sh == 'teardrop':
-            d.setCornerRadii([0, 0, 0, 0, r*2, r*2, r*2, r*2])
-        elif sh in shapes:
-            d.setCornerRadius(shapes[sh])
-        else:
-            d.setCornerRadius(r)
-
-        if self.s.get('show_border', False):
-            d.setStroke(self._dp(int(self.s.get('border_width', 1))), CC.WHITE)
-        v.setBackground(d)
-        if self.s.get('enable_shadow', True):
-            v.setElevation(self._dp(5))
-        return v
-
-    def _setup_touch(self):
-        if not IS_ANDROID or not self.overlay_view:
-            return
-        try:
-            from jnius import autoclass, PythonJavaClass, java_method
-            ME = autoclass('android.view.MotionEvent')
-            mgr = self
-
-            class TouchHandler(PythonJavaClass):
-                __javainterfaces__ = ['android/view/View$OnTouchListener']
-                __javacontext__ = 'app'
-
-                def __init__(self):
-                    super().__init__()
-                    self.down_time = 0.0
-                    self.down_x = 0.0
-                    self.down_y = 0.0
-                    self.tap_count = 0
-                    self.last_tap_time = 0.0
-                    self.tap_timer = None
-
-                @java_method('(Landroid/view/View;Landroid/view/MotionEvent;)Z')
-                def onTouch(self, view, event):
-                    action = event.getAction()
-
-                    if action == ME.ACTION_DOWN:
-                        self.down_time = time.time()
-                        self.down_x = event.getRawX()
-                        self.down_y = event.getRawY()
-                        return True
-
-                    if action == ME.ACTION_UP:
-                        duration_ms = int((time.time() - self.down_time) * 1000)
-                        dx = event.getRawX() - self.down_x
-                        dy = event.getRawY() - self.down_y
-
-                        threshold = {1: 160, 2: 120, 3: 80}.get(
-                            int(mgr.s.get('touch_sensitivity', 2)), 120
-                        )
-
-                        # Swipe Right
-                        if dx > threshold and abs(dx) > abs(dy):
-                            mgr._fire('swipe_right')
-                            return True
-
-                        # Swipe Left
-                        if dx < -threshold and abs(dx) > abs(dy):
-                            mgr._fire('swipe_left')
-                            return True
-
-                        # Long Touch
-                        long_dur = int(mgr.s.get('long_touch_duration', 500))
-                        if duration_ms >= long_dur:
-                            mgr._fire('long_touch')
-                            return True
-
-                        # Tap counting for single/double
-                        now = time.time()
-                        double_speed = int(mgr.s.get('double_touch_speed', 300)) / 1000.0
-
-                        if now - self.last_tap_time < double_speed:
-                            self.tap_count += 1
-                        else:
-                            self.tap_count = 1
-                        self.last_tap_time = now
-
-                        # Cancel previous timer
-                        if self.tap_timer:
-                            try:
-                                self.tap_timer.cancel()
-                            except Exception:
-                                pass
-
-                        # Wait to see if double tap comes
-                        self.tap_timer = threading.Timer(
-                            double_speed + 0.05,
-                            mgr._resolve_taps,
-                            [self.tap_count]
-                        )
-                        self.tap_timer.start()
-                        return True
-
-                    return True
-
-            self.overlay_view.setOnTouchListener(TouchHandler())
+            pygame.mixer.music.play(start=self._offset)
+            self._start_t = time.time() - self._offset
+            self.paused   = False
         except Exception as e:
-            print(f'Touch setup error: {e}')
+            print(f"[AudioEngine.play] {e}")
 
-    def _resolve_taps(self, count):
-        if count >= 2:
-            self._fire('double_touch')
-        else:
-            self._fire('single_touch')
+    def pause(self):
+        if not HAS_PYGAME or self.paused:
+            return
+        pygame.mixer.music.pause()
+        self._offset = self.position
+        self.paused  = True
 
-    def _fire(self, gesture_key):
-        action = self.s.get(gesture_key, 'Do Nothing')
-        print(f'[{gesture_key}] -> {action}')
+    def resume(self):
+        if not HAS_PYGAME or not self.paused:
+            return
+        pygame.mixer.music.unpause()
+        self._start_t = time.time() - self._offset
+        self.paused   = False
 
-        # Haptic
-        if self.s.get('haptic_enabled', True) and IS_ANDROID:
+    def stop(self):
+        if HAS_PYGAME:
             try:
-                from jnius import autoclass
-                Ctx = autoclass('android.content.Context')
-                vib = self._act().getSystemService(Ctx.VIBRATOR_SERVICE)
-                ms = {1: 10, 2: 25, 3: 50}.get(
-                    int(self.s.get('haptic_intensity', 2)), 25
-                )
-                vib.vibrate(ms)
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
+        self._offset  = 0.0
+        self._start_t = 0.0
+        self.paused   = False
+
+    def seek(self, seconds):
+        if not HAS_PYGAME or not self._path:
+            return
+        seconds = max(0.0, min(float(seconds), self._duration))
+        try:
+            pygame.mixer.music.play(start=seconds)
+            self._offset  = seconds
+            self._start_t = time.time() - seconds
+            self.paused   = False
+        except Exception as e:
+            print(f"[AudioEngine.seek] {e}")
+
+    def set_volume(self, v):
+        self.volume = max(0.0, min(1.0, v))
+        if HAS_PYGAME:
+            pygame.mixer.music.set_volume(self.volume)
+
+    @property
+    def position(self):
+        if self.paused:
+            return self._offset
+        if HAS_PYGAME and pygame.mixer.music.get_busy():
+            return time.time() - self._start_t
+        return self._offset
+
+    @property
+    def duration(self):
+        return self._duration
+
+    @property
+    def is_busy(self):
+        return HAS_PYGAME and pygame.mixer.music.get_busy()
+
+    def quit(self):
+        self.stop()
+        if HAS_PYGAME:
+            try:
+                pygame.mixer.quit()
             except Exception:
                 pass
 
-        ActionExecutor.execute(action, self.s, gesture_key)
 
-    def _act(self):
-        from jnius import autoclass
-        try:
-            return autoclass('org.kivy.android.PythonActivity').mActivity
-        except Exception:
-            return autoclass('org.kivy.android.PythonService').mService
+# ═══════════════════════════════════════════════════════════════
+#  VU METER
+# ═══════════════════════════════════════════════════════════════
 
-    def _w(self):
-        from jnius import autoclass
-        R = autoclass('android.content.res.Resources')
-        sw = R.getSystem().getDisplayMetrics().widthPixels
-        p = max(10, min(100, int(self.s.get('notch_width', 40))))
-        return int(sw * p / 100)
+class VUMeter(Widget):
+    levels = ListProperty([0.0] * 20)
 
-    def _h(self):
-        return self._dp(int(self.s.get('notch_height', 28)))
-
-    def _dp(self, v):
-        from jnius import autoclass
-        R = autoclass('android.content.res.Resources')
-        return int(v * R.getSystem().getDisplayMetrics().density)
-
-
-# ============================================================
-# NOTCH PREVIEW
-# ============================================================
-class NotchPreview(Widget):
     def __init__(self, **kw):
         super().__init__(**kw)
-        self.bind(pos=self._draw, size=self._draw)
-        Clock.schedule_interval(self._draw, 1.0)
+        self.bind(levels=self._draw, pos=self._draw, size=self._draw)
 
     def _draw(self, *_):
         self.canvas.clear()
-        app = App.get_running_app()
-        cx, cy = self.center_x, self.center_y
-        try:
-            nc = list(get_color_from_hex(app.cfg.get('notch_color', '#000000')))
-        except Exception:
-            nc = [0, 0, 0, 1]
+        n     = len(self.levels)
+        gap   = dp(2)
+        bar_w = max(1.0, (self.width - gap * (n - 1)) / n)
         with self.canvas:
-            Color(0.25, 0.25, 0.35, 1)
-            RoundedRectangle(pos=(cx-dp(55), cy-dp(48)),
-                             size=(dp(110), dp(96)), radius=[dp(14)])
-            Color(0.08, 0.08, 0.13, 1)
-            RoundedRectangle(pos=(cx-dp(50), cy-dp(43)),
-                             size=(dp(100), dp(86)), radius=[dp(10)])
-            Color(*nc)
-            RoundedRectangle(pos=(cx-dp(22), cy+dp(29)),
-                             size=(dp(44), dp(14)), radius=[dp(7)])
-            Color(0.15, 0.15, 0.22, 1)
-            Ellipse(pos=(cx-dp(3), cy+dp(33)), size=(dp(6), dp(6)))
-            Color(0.3, 0.8, 0.3, 0.7)
-            Line(circle=(cx, cy, dp(42), 0, 270), width=dp(1.5))
+            for i, lv in enumerate(self.levels):
+                x    = self.x + i * (bar_w + gap)
+                h    = max(dp(3), lv * self.height)
+                frac = i / max(1, n - 1)
+                r    = min(1.0, frac * 2.0)
+                g    = min(1.0, (1.0 - frac) * 2.0)
+                Color(r, g, 0.4, 0.25 + 0.75 * lv)
+                RoundedRectangle(
+                    pos=(x, self.y), size=(bar_w, h), radius=[dp(2)]
+                )
 
 
-# ============================================================
-# UI BUILDER
-# ============================================================
-class UI:
-    BG = '#0F0F1A'
-    CARD = '#2A2A3D'
-    TOP = '#1A1A2E'
-    ACC = '#6C63FF'
-    GRN = '#4CAF50'
-    RED = '#FF5252'
-    ORG = '#FF9800'
-    SUB = '#888899'
-    WH = '#FFFFFF'
+# ═══════════════════════════════════════════════════════════════
+#  VINYL DISC
+# ═══════════════════════════════════════════════════════════════
 
-    @staticmethod
-    def _br(w, rr):
-        w.bind(pos=lambda i, v: setattr(rr, 'pos', v),
-               size=lambda i, v: setattr(rr, 'size', v))
+class VinylDisc(Widget):
+    angle    = NumericProperty(0)
+    spinning = BooleanProperty(False)
 
-    @staticmethod
-    def bg():
-        b = BoxLayout(orientation='vertical')
-        with b.canvas.before:
-            Color(*get_color_from_hex(UI.BG))
-            r = Rectangle(pos=b.pos, size=b.size)
-        b.bind(pos=lambda i, v: setattr(r, 'pos', v),
-               size=lambda i, v: setattr(r, 'size', v))
-        return b
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.bind(pos=self._draw, size=self._draw, angle=self._draw)
+        self._anim = None
 
-    @staticmethod
-    def card(h=dp(62)):
-        b = BoxLayout(orientation='horizontal', size_hint_y=None, height=h,
-                      padding=[dp(15), dp(10)], spacing=dp(10))
-        with b.canvas.before:
-            Color(*get_color_from_hex(UI.CARD))
-            rr = RoundedRectangle(pos=b.pos, size=b.size, radius=[dp(14)])
-        UI._br(b, rr)
-        return b
+    def _draw(self, *_):
+        self.canvas.clear()
+        cx = self.center_x
+        cy = self.center_y
+        r  = min(self.width, self.height) / 2.0 - dp(4)
 
-    @staticmethod
-    def lbl(t, fs=sp(13), c=None, ha='left', va='center',
-            bold=False, shy=None, h=None):
-        c = c or get_color_from_hex(UI.WH)
-        kw = dict(text=t, font_size=fs, color=c, halign=ha,
-                  valign=va, bold=bold)
-        if shy is not None:
-            kw['size_hint_y'] = shy
-        if h is not None:
-            kw['height'] = h
-        l = Label(**kw)
-        l.bind(size=lambda i, v: setattr(i, 'text_size', v))
-        return l
+        with self.canvas:
+            # outer disc body
+            Color(0.12, 0.08, 0.22, 1)
+            Ellipse(pos=(cx - r, cy - r), size=(r * 2, r * 2))
 
-    @staticmethod
-    def sec(t):
-        return UI.lbl(t, fs=sp(15), bold=True,
-                      c=get_color_from_hex(UI.ACC), shy=None, h=dp(36))
+            # groove rings
+            for i in range(7):
+                rr = r * (0.92 - i * 0.09)
+                Color(0.22, 0.14, 0.35, 0.55)
+                Line(circle=(cx, cy, rr), width=dp(0.7))
 
-    @staticmethod
-    def nav(t, cb):
-        c = UI.card()
-        c.add_widget(UI.lbl(t))
-        c.add_widget(Label(text='>', font_size=sp(20),
-                           color=get_color_from_hex(UI.ACC),
-                           size_hint_x=None, width=dp(25)))
-        c.bind(on_touch_down=lambda i, touch:
-               cb() if i.collide_point(*touch.pos) else None)
-        return c
+            # rotating highlight
+            a_rad = math.radians(self.angle)
+            hx = cx + r * 0.52 * math.cos(a_rad)
+            hy = cy + r * 0.52 * math.sin(a_rad)
+            Color(1, 1, 1, 0.06)
+            Ellipse(
+                pos=(hx - r * 0.20, hy - r * 0.13),
+                size=(r * 0.40, r * 0.26)
+            )
 
-    @staticmethod
-    def sw(t, active, cb):
-        c = UI.card()
-        c.add_widget(UI.lbl(t))
-        s = Switch(active=active, size_hint_x=None, width=dp(55))
-        s.bind(active=lambda i, v: cb(v))
-        c.add_widget(s)
-        return c
+            # center label (accent circle)
+            rl = r * 0.29
+            Color(*C_ACCENT)
+            Ellipse(pos=(cx - rl, cy - rl), size=(rl * 2, rl * 2))
 
-    @staticmethod
-    def sld(lt, vt, mn, mx, v, cb, step=1, sfx=''):
-        box = BoxLayout(orientation='vertical', size_hint_y=None,
-                        height=dp(75), padding=[dp(15), dp(8)])
-        with box.canvas.before:
-            Color(*get_color_from_hex(UI.CARD))
-            rr = RoundedRectangle(pos=box.pos, size=box.size,
-                                  radius=[dp(14)])
-        UI._br(box, rr)
-        top = BoxLayout()
-        ll = UI.lbl(lt)
-        vl = UI.lbl(vt, c=get_color_from_hex(UI.ACC), ha='right')
-        top.add_widget(ll)
-        top.add_widget(vl)
-        sl = Slider(min=mn, max=mx, value=v, step=step)
-        sl.bind(value=lambda i, val: (
-            setattr(vl, 'text', str(int(val)) + sfx), cb(val)))
-        box.add_widget(top)
-        box.add_widget(sl)
-        return box
+            # inner ring on label
+            Color(0.75, 0.45, 1.0, 0.45)
+            Line(circle=(cx, cy, rl * 0.68), width=dp(0.9))
 
-    @staticmethod
-    def sgrid():
-        sv = ScrollView(do_scroll_x=False, bar_width=0)
-        g = GridLayout(cols=1, spacing=dp(7), padding=[dp(12)],
-                       size_hint_y=None)
-        g.bind(minimum_height=g.setter('height'))
-        sv.add_widget(g)
-        return sv, g
+            # spindle hole
+            rh = dp(4)
+            Color(*C_BG)
+            Ellipse(pos=(cx - rh, cy - rh), size=(rh * 2, rh * 2))
 
-    @staticmethod
-    def tbar(t, cb):
-        bar = BoxLayout(orientation='horizontal', size_hint_y=None,
-                        height=dp(54), padding=[dp(10), dp(5)])
-        with bar.canvas.before:
-            Color(*get_color_from_hex(UI.TOP))
-            rr = RoundedRectangle(pos=bar.pos, size=bar.size,
-                                  radius=[0, 0, dp(16), dp(16)])
-        UI._br(bar, rr)
-        back = Button(text='< Back', size_hint_x=None, width=dp(80),
-                      background_color=[0, 0, 0, 0], background_normal='',
-                      color=get_color_from_hex(UI.ACC), font_size=sp(14))
-        back.bind(on_release=lambda *_: cb())
-        bar.add_widget(back)
-        bar.add_widget(Label(text=t, font_size=sp(18), bold=True,
-                             color=get_color_from_hex(UI.WH)))
-        bar.add_widget(Widget(size_hint_x=None, width=dp(80)))
-        return bar
+    def start_spin(self):
+        if self.spinning:
+            return
+        self.spinning = True
+        self._step()
 
-    @staticmethod
-    def btn(t, cb, color=None):
-        color = color or UI.ACC
-        b = Button(text=t, size_hint_y=None, height=dp(48),
-                   font_size=sp(14), bold=True,
-                   background_color=[0, 0, 0, 0], background_normal='',
-                   color=get_color_from_hex(UI.WH))
-        with b.canvas.before:
-            Color(*get_color_from_hex(color))
-            rr = RoundedRectangle(pos=b.pos, size=b.size,
-                                  radius=[dp(12)])
-        UI._br(b, rr)
+    def stop_spin(self):
+        self.spinning = False
+        if self._anim:
+            self._anim.cancel(self)
+
+    def _step(self, *_):
+        if not self.spinning:
+            return
+        self._anim = Animation(
+            angle=self.angle + 360, duration=3.6, transition="linear"
+        )
+        self._anim.bind(on_complete=self._step)
+        self._anim.start(self)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PLAYLIST ROW  (pure Python – no KV, no RecycleView issues)
+# ═══════════════════════════════════════════════════════════════
+
+class PlaylistRow(ButtonBehavior, BoxLayout):
+    def __init__(self, index, title, artist, duration,
+                 selected=False, on_play=None, on_remove=None, **kw):
+        kw.setdefault("size_hint_y", None)
+        kw.setdefault("height", dp(58))
+        super().__init__(orientation="horizontal", **kw)
+        self._index     = index
+        self._on_play   = on_play
+        self._on_remove = on_remove
+        self._build(index, title, artist, duration, selected)
+
+    def _build(self, index, title, artist, duration, selected):
+        self.padding = [dp(8), dp(4), dp(6), dp(4)]
+        self.spacing = dp(6)
+
+        # track number
+        self.add_widget(Label(
+            text=str(index + 1),
+            size_hint=(None, 1), width=dp(28),
+            font_size=sp(11), bold=selected,
+            color=list(C_ACCENT) if selected else list(C_MUTED),
+        ))
+
+        # title + artist
+        info = BoxLayout(orientation="vertical", spacing=dp(2))
+        lbl_t = Label(
+            text=title, font_size=sp(13), bold=selected,
+            color=list(C_TEXT) if selected else (0.82, 0.82, 0.88, 1),
+            halign="left", valign="middle",
+            shorten=True, shorten_from="right",
+        )
+        lbl_t.bind(size=lambda w, s: setattr(w, "text_size", (s[0], None)))
+        lbl_a = Label(
+            text=artist, font_size=sp(11),
+            color=list(C_ACCENT) if selected else list(C_MUTED),
+            halign="left", valign="middle",
+            shorten=True, shorten_from="right",
+        )
+        lbl_a.bind(size=lambda w, s: setattr(w, "text_size", (s[0], None)))
+        info.add_widget(lbl_t)
+        info.add_widget(lbl_a)
+        self.add_widget(info)
+
+        # duration
+        self.add_widget(Label(
+            text=duration,
+            size_hint=(None, 1), width=dp(40),
+            font_size=sp(11), color=list(C_MUTED),
+        ))
+
+        # remove button
+        btn_del = Button(
+            text="✕",
+            size_hint=(None, None), size=(dp(26), dp(26)),
+            font_size=sp(12),
+            background_normal="", background_color=(0.30, 0.08, 0.08, 1),
+            color=(0.90, 0.40, 0.40, 1),
+        )
+        btn_del.bind(
+            on_release=lambda *_: self._on_remove and self._on_remove(self._index)
+        )
+        self.add_widget(btn_del)
+
+        # background drawn in canvas.before
+        with self.canvas.before:
+            self._bg_col  = Color(*(C_ITEM_SEL if selected else C_ITEM))
+            self._bg_rect = RoundedRectangle(
+                pos=self.pos, size=self.size, radius=[dp(10)]
+            )
+        self.bind(pos=self._upd_bg, size=self._upd_bg)
+
+    def _upd_bg(self, *_):
+        self._bg_rect.pos  = (self.x + dp(3), self.y + dp(2))
+        self._bg_rect.size = (self.width - dp(6), self.height - dp(4))
+
+    def on_release(self):
+        if self._on_play:
+            self._on_play(self._index)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  MAIN APPLICATION
+# ═══════════════════════════════════════════════════════════════
+
+class NovaMusicApp(App):
+    title = "NOVA Music Player"
+
+    _tracks     = []
+    _cur_idx    = -1
+    _is_playing = False
+    _seeking    = False
+    _repeat     = 0      # 0=off  1=one  2=all
+    _shuffle    = False
+    _vu_t       = 0.0
+
+    # ── lifecycle ─────────────────────────────────────────────
+
+    def build(self):
+        Window.clearcolor = C_BG
+        self.engine = AudioEngine()
+        self._load_playlist_file()
+        ui = self._build_ui()
+        Clock.schedule_interval(self._tick,    0.15)
+        Clock.schedule_interval(self._vu_tick, 0.055)
+        return ui
+
+    def on_stop(self):
+        self.engine.quit()
+
+    # ═══════════════════════════════════════════════════════════
+    #  UI BUILD
+    # ═══════════════════════════════════════════════════════════
+
+    def _build_ui(self):
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(12), dp(10), dp(12), dp(8)],
+            spacing=dp(8),
+        )
+        # root background
+        with root.canvas.before:
+            Color(*C_BG)
+            self._root_bg = Rectangle(pos=root.pos, size=root.size)
+        root.bind(
+            pos =lambda w, _: setattr(self._root_bg, "pos",  w.pos),
+            size=lambda w, _: setattr(self._root_bg, "size", w.size),
+        )
+
+        root.add_widget(self._build_header())
+        root.add_widget(self._build_player_card())
+        root.add_widget(self._build_seek_row())
+        root.add_widget(self._build_controls())
+        root.add_widget(self._build_volume_row())
+        root.add_widget(self._build_playlist_header())
+        root.add_widget(self._build_playlist_area())
+        return root
+
+    # ─── header ───────────────────────────────────────────────
+
+    def _build_header(self):
+        row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        row.add_widget(Label(
+            text="♪  NOVA",
+            font_size=sp(20), bold=True, color=C_ACCENT,
+            size_hint_x=None, width=dp(110),
+            halign="left",
+        ))
+        row.add_widget(Widget())
+        row.add_widget(self._btn("+ File",   self._open_file_dialog,   C_ACCENT,  dp(76), dp(36)))
+        row.add_widget(self._btn("+ Folder", self._open_folder_dialog, C_SURFACE, dp(82), dp(36)))
+        row.add_widget(self._btn("💾",       self._save_playlist,      C_SURFACE, dp(36), dp(36)))
+        return row
+
+    # ─── player card ──────────────────────────────────────────
+
+    def _build_player_card(self):
+        card = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None, height=dp(200),
+            padding=[dp(14), dp(12)],
+            spacing=dp(12),
+        )
+        with card.canvas.before:
+            Color(*C_CARD)
+            self._card_bg = RoundedRectangle(
+                pos=card.pos, size=card.size, radius=[dp(18)]
+            )
+        card.bind(
+            pos =lambda w, _: setattr(self._card_bg, "pos",  w.pos),
+            size=lambda w, _: setattr(self._card_bg, "size", w.size),
+        )
+
+        # vinyl disc on the left
+        self.disc = VinylDisc(size_hint=(None, 1), width=dp(168))
+        card.add_widget(self.disc)
+
+        # info panel on the right
+        info = BoxLayout(orientation="vertical", spacing=dp(5))
+        self.lbl_title  = self._mk_info_label("No track selected", sp(14), C_TEXT, bold=True)
+        self.lbl_artist = self._mk_info_label("Unknown Artist",    sp(12), C_ACCENT)
+        self.lbl_album  = self._mk_info_label("",                  sp(11), C_MUTED)
+        self.lbl_time   = self._mk_info_label("0:00 / 0:00",       sp(11), C_MUTED)
+        self.vu         = VUMeter(size_hint=(1, None), height=dp(32))
+        info.add_widget(self.lbl_title)
+        info.add_widget(self.lbl_artist)
+        info.add_widget(self.lbl_album)
+        info.add_widget(self.lbl_time)
+        info.add_widget(Widget())
+        info.add_widget(self.vu)
+        card.add_widget(info)
+        return card
+
+    def _mk_info_label(self, text, size, color, bold=False):
+        lbl = Label(
+            text=text, font_size=size, bold=bold, color=color,
+            halign="left", valign="middle",
+            shorten=True, shorten_from="right",
+        )
+        lbl.bind(size=lambda w, s: setattr(w, "text_size", (s[0], None)))
+        return lbl
+
+    # ─── seek bar ─────────────────────────────────────────────
+
+    def _build_seek_row(self):
+        row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
+        self.lbl_pos = Label(
+            text="0:00", font_size=sp(11), color=C_MUTED,
+            size_hint_x=None, width=dp(36),
+        )
+        self.seek_bar = Slider(
+            min=0, max=1, value=0,
+            value_track=True, value_track_color=list(C_ACCENT),
+            value_track_width=dp(3), cursor_size=(dp(14), dp(14)),
+        )
+        self.seek_bar.bind(
+            on_touch_down=self._seek_down,
+            on_touch_up=self._seek_up,
+        )
+        self.lbl_dur = Label(
+            text="0:00", font_size=sp(11), color=C_MUTED,
+            size_hint_x=None, width=dp(36),
+        )
+        row.add_widget(self.lbl_pos)
+        row.add_widget(self.seek_bar)
+        row.add_widget(self.lbl_dur)
+        return row
+
+    # ─── controls ─────────────────────────────────────────────
+
+    def _build_controls(self):
+        row = BoxLayout(
+            size_hint_y=None, height=dp(68),
+            spacing=dp(6), padding=[dp(4), 0],
+        )
+        self.btn_shuffle = self._icon_btn("⇄", self._toggle_shuffle, dp(44), sp(20), C_SURFACE)
+        self.btn_prev    = self._icon_btn("⏮", self._prev,           dp(52), sp(24), C_SURFACE)
+        self.btn_play    = self._icon_btn("▶", self._toggle_play,    dp(64), sp(30), C_ACCENT)
+        self.btn_next    = self._icon_btn("⏭", self._next,           dp(52), sp(24), C_SURFACE)
+        self.btn_repeat  = self._icon_btn("↻", self._toggle_repeat,  dp(44), sp(20), C_SURFACE)
+
+        row.add_widget(self.btn_shuffle)
+        row.add_widget(Widget())
+        row.add_widget(self.btn_prev)
+        row.add_widget(self.btn_play)
+        row.add_widget(self.btn_next)
+        row.add_widget(Widget())
+        row.add_widget(self.btn_repeat)
+        return row
+
+    # ─── volume ───────────────────────────────────────────────
+
+    def _build_volume_row(self):
+        row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        row.add_widget(Label(
+            text="🔊", font_size=sp(16), color=C_MUTED,
+            size_hint_x=None, width=dp(28),
+        ))
+        self.vol_slider = Slider(
+            min=0, max=1, value=0.8,
+            value_track=True, value_track_color=list(C_PINK),
+            value_track_width=dp(2), cursor_size=(dp(12), dp(12)),
+        )
+        self.vol_slider.bind(value=lambda _, v: self.engine.set_volume(v))
+        row.add_widget(self.vol_slider)
+        return row
+
+    # ─── playlist header ──────────────────────────────────────
+
+    def _build_playlist_header(self):
+        row = BoxLayout(size_hint_y=None, height=dp(30), spacing=dp(6))
+        row.add_widget(Label(
+            text="PLAYLIST", font_size=sp(11), bold=True,
+            color=C_MUTED, size_hint_x=None, width=dp(72),
+        ))
+        self.lbl_count = Label(text="0 tracks", font_size=sp(11), color=C_MUTED)
+        row.add_widget(self.lbl_count)
+        row.add_widget(Widget())
+        row.add_widget(self._btn(
+            "Clear All", self._clear_playlist,
+            (0.22, 0.06, 0.06, 1), dp(80), dp(26), font=sp(11),
+        ))
+        return row
+
+    # ─── playlist scroll area ─────────────────────────────────
+
+    def _build_playlist_area(self):
+        # card background container
+        wrap = FloatLayout()
+        with wrap.canvas.before:
+            Color(*C_SURFACE)
+            self._pl_bg = RoundedRectangle(
+                pos=wrap.pos, size=wrap.size, radius=[dp(14)]
+            )
+        wrap.bind(
+            pos =lambda w, _: setattr(self._pl_bg, "pos",  w.pos),
+            size=lambda w, _: setattr(self._pl_bg, "size", w.size),
+        )
+
+        self.scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        self.pl_box = GridLayout(
+            cols=1, spacing=dp(2),
+            padding=[dp(6), dp(6), dp(6), dp(6)],
+            size_hint_y=None,
+        )
+        self.pl_box.bind(minimum_height=self.pl_box.setter("height"))
+        self.scroll.add_widget(self.pl_box)
+        wrap.add_widget(self.scroll)
+        return wrap
+
+    # ── small widget factories ────────────────────────────────
+
+    def _btn(self, text, cb, bg, w=dp(88), h=dp(36), font=sp(12)):
+        b = Button(
+            text=text, size_hint=(None, None), size=(w, h),
+            font_size=font, bold=True,
+            background_normal="", background_color=bg, color=C_TEXT,
+        )
         b.bind(on_release=lambda *_: cb())
         return b
 
-    @staticmethod
-    def cbtn(ch, cb):
-        b = Button(background_color=[0, 0, 0, 0], background_normal='',
-                   size_hint=(None, None), size=(dp(34), dp(34)))
-        with b.canvas.before:
-            Color(*get_color_from_hex(ch))
-            e = Ellipse(pos=b.pos, size=b.size)
-        b.bind(pos=lambda i, v: setattr(e, 'pos', v),
-               size=lambda i, v: setattr(e, 'size', v))
-        b.bind(on_release=lambda *_: cb(ch))
+    def _icon_btn(self, text, cb, size=dp(44), font=sp(22), bg=C_SURFACE):
+        b = Button(
+            text=text, size_hint=(None, None), size=(size, size),
+            font_size=font, bold=True,
+            background_normal="", background_color=bg, color=C_TEXT,
+        )
+        b.bind(on_release=lambda *_: cb())
         return b
 
-    @staticmethod
-    def preview():
-        pb = BoxLayout(size_hint_y=None, height=dp(120), padding=[dp(10)])
-        with pb.canvas.before:
-            Color(*get_color_from_hex('#1A1A2E'))
-            rr = RoundedRectangle(pos=pb.pos, size=pb.size,
-                                  radius=[dp(14)])
-        UI._br(pb, rr)
-        pb.add_widget(NotchPreview())
-        return pb
-
-    @staticmethod
-    def popup(t, m):
-        Popup(title=t, content=Label(text=m, font_size=sp(13)),
-              size_hint=(0.8, 0.22)).open()
-
-
-# ============================================================
-# PICKER POPUPS
-# ============================================================
-def show_app_picker(gesture_key, s, info_lbl):
-    content = BoxLayout(orientation='vertical', spacing=dp(6),
-                        padding=dp(8))
-
-    # Search
-    search = TextInput(
-        hint_text='Search apps...', size_hint_y=None, height=dp(42),
-        font_size=sp(14), multiline=False,
-        background_color=get_color_from_hex('#2A2A3D'),
-        foreground_color=[1, 1, 1, 1], cursor_color=[1, 1, 1, 1],
-        hint_text_color=[0.5, 0.5, 0.6, 1]
-    )
-    content.add_widget(search)
-
-    # Loading label
-    loading = Label(text='Loading all apps...',
-                    font_size=sp(11),
-                    color=get_color_from_hex(UI.SUB),
-                    size_hint_y=None, height=dp(22))
-    content.add_widget(loading)
-
-    # App list
-    sv = ScrollView(do_scroll_x=False, bar_width=dp(3))
-    grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
-    grid.bind(minimum_height=grid.setter('height'))
-    sv.add_widget(grid)
-    content.add_widget(sv)
-
-    # Cancel
-    cancel = Button(text='Cancel', size_hint_y=None, height=dp(38),
-                    background_color=get_color_from_hex(UI.RED))
-    content.add_widget(cancel)
-
-    popup = Popup(title='Select App', content=content,
-                  size_hint=(0.92, 0.88))
-    cancel.bind(on_release=popup.dismiss)
-
-    def load(dt):
-        # Clear cache to get fresh list
-        AppLauncher.clear_cache()
-        apps = AppLauncher.get_apps()
-        loading.text = f'{len(apps)} apps found (including games)'
-
-        all_btns = []
-        for name, pkg in apps:
-            b = Button(
-                text=f'  {name}', size_hint_y=None, height=dp(44),
-                font_size=sp(12), halign='left', valign='center',
-                background_color=[0, 0, 0, 0], background_normal='',
-                color=[1, 1, 1, 1]
-            )
-            b.bind(size=lambda i, v: setattr(i, 'text_size', v))
-            with b.canvas.before:
-                Color(*get_color_from_hex(UI.CARD))
-                rr = RoundedRectangle(pos=b.pos, size=b.size,
-                                      radius=[dp(8)])
-            UI._br(b, rr)
-
-            def sel(inst, _n=name, _p=pkg):
-                s.set(gesture_key, 'Open App')
-                s.set(f'{gesture_key}_app_name', _n)
-                s.set(f'{gesture_key}_app_package', _p)
-                info_lbl.text = f'  > Open App: {_n}'
-                info_lbl.color = get_color_from_hex(UI.GRN)
-                popup.dismiss()
-
-            b.bind(on_release=sel)
-            grid.add_widget(b)
-            all_btns.append((name, pkg, b))
-
-        def filt(inst, text):
-            grid.clear_widgets()
-            q = text.lower().strip()
-            for n, p, bt in all_btns:
-                if q == '' or q in n.lower() or q in p.lower():
-                    grid.add_widget(bt)
-
-        search.bind(text=filt)
-
-    Clock.schedule_once(load, 0.3)
-    popup.open()
-
-
-def show_contact_picker(gesture_key, s, info_lbl):
-    content = BoxLayout(orientation='vertical', spacing=dp(6),
-                        padding=dp(8))
-
-    search = TextInput(
-        hint_text='Search contacts...', size_hint_y=None, height=dp(42),
-        font_size=sp(14), multiline=False,
-        background_color=get_color_from_hex('#2A2A3D'),
-        foreground_color=[1, 1, 1, 1], cursor_color=[1, 1, 1, 1],
-        hint_text_color=[0.5, 0.5, 0.6, 1]
-    )
-    content.add_widget(search)
-
-    loading = Label(text='Loading contacts...',
-                    font_size=sp(11),
-                    color=get_color_from_hex(UI.SUB),
-                    size_hint_y=None, height=dp(22))
-    content.add_widget(loading)
-
-    sv = ScrollView(do_scroll_x=False, bar_width=dp(3))
-    grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
-    grid.bind(minimum_height=grid.setter('height'))
-    sv.add_widget(grid)
-    content.add_widget(sv)
-
-    cancel = Button(text='Cancel', size_hint_y=None, height=dp(38),
-                    background_color=get_color_from_hex(UI.RED))
-    content.add_widget(cancel)
-
-    popup = Popup(title='Select Contact to Call', content=content,
-                  size_hint=(0.92, 0.88))
-    cancel.bind(on_release=popup.dismiss)
-
-    def load(dt):
-        ContactManager.clear_cache()
-        contacts = ContactManager.get_contacts()
-        loading.text = f'{len(contacts)} contacts found'
-
-        all_btns = []
-        for name, number in contacts:
-            display = f'  {name}  |  {number}'
-            b = Button(
-                text=display, size_hint_y=None, height=dp(48),
-                font_size=sp(12), halign='left', valign='center',
-                background_color=[0, 0, 0, 0], background_normal='',
-                color=[1, 1, 1, 1]
-            )
-            b.bind(size=lambda i, v: setattr(i, 'text_size', v))
-            with b.canvas.before:
-                Color(*get_color_from_hex(UI.CARD))
-                rr = RoundedRectangle(pos=b.pos, size=b.size,
-                                      radius=[dp(8)])
-            UI._br(b, rr)
-
-            def sel(inst, _n=name, _num=number):
-                s.set(gesture_key, 'Call Contact')
-                s.set(f'{gesture_key}_call_name', _n)
-                s.set(f'{gesture_key}_call_number', _num)
-                info_lbl.text = f'  > Call: {_n} ({_num})'
-                info_lbl.color = get_color_from_hex(UI.GRN)
-                popup.dismiss()
-
-            b.bind(on_release=sel)
-            grid.add_widget(b)
-            all_btns.append((name, number, b))
-
-        def filt(inst, text):
-            grid.clear_widgets()
-            q = text.lower().strip()
-            for n, num, bt in all_btns:
-                if q == '' or q in n.lower() or q in num:
-                    grid.add_widget(bt)
-
-        search.bind(text=filt)
-
-    Clock.schedule_once(load, 0.3)
-    popup.open()
-
-
-# ============================================================
-# GESTURE CARD
-# ============================================================
-def gesture_card(grid, gk, gn, s):
-    c = UI.card(h=dp(108))
-    inner = BoxLayout(orientation='vertical', spacing=dp(2))
-
-    inner.add_widget(UI.lbl(gn, fs=sp(14), bold=True, va='bottom'))
-
-    # Current status
-    action = s.get(gk, 'Do Nothing')
-    if action == 'Open App':
-        an = s.get(f'{gk}_app_name', '')
-        txt = f'  > Open App: {an}' if an else '  > Open App: (not set)'
-    elif action == 'Call Contact':
-        cn = s.get(f'{gk}_call_name', '')
-        nm = s.get(f'{gk}_call_number', '')
-        txt = f'  > Call: {cn} ({nm})' if cn else '  > Call: (not set)'
-    else:
-        txt = f'  > {action}'
-
-    info = Label(
-        text=txt, font_size=sp(10),
-        color=get_color_from_hex(UI.GRN),
-        halign='left', valign='center',
-        size_hint_y=None, height=dp(18)
-    )
-    info.bind(size=lambda i, v: setattr(i, 'text_size', v))
-
-    # Buttons row
-    row = BoxLayout(spacing=dp(4), size_hint_y=None, height=dp(32))
-
-    spinner = Spinner(
-        text=action, values=ALL_ACTIONS,
-        size_hint_x=0.45, font_size=sp(9)
-    )
-
-    pick_app = Button(
-        text='Pick App', size_hint_x=0.28, font_size=sp(9),
-        bold=True, background_color=get_color_from_hex(UI.ACC),
-        color=[1, 1, 1, 1],
-        disabled=(action != 'Open App')
-    )
-
-    pick_contact = Button(
-        text='Pick Contact', size_hint_x=0.27, font_size=sp(9),
-        bold=True, background_color=get_color_from_hex(UI.ORG),
-        color=[1, 1, 1, 1],
-        disabled=(action != 'Call Contact')
-    )
-
-    def on_action(inst, val):
-        s.set(gk, val)
-        pick_app.disabled = (val != 'Open App')
-        pick_contact.disabled = (val != 'Call Contact')
-
-        if val == 'Open App':
-            an = s.get(f'{gk}_app_name', '')
-            info.text = f'  > Open App: {an}' if an else '  > Tap "Pick App"'
-            info.color = get_color_from_hex(
-                UI.GRN if an else UI.ORG
-            )
-        elif val == 'Call Contact':
-            cn = s.get(f'{gk}_call_name', '')
-            info.text = f'  > Call: {cn}' if cn else '  > Tap "Pick Contact"'
-            info.color = get_color_from_hex(
-                UI.GRN if cn else UI.ORG
-            )
-        else:
-            info.text = f'  > {val}'
-            info.color = get_color_from_hex(UI.GRN)
-
-    spinner.bind(text=on_action)
-
-    pick_app.bind(on_release=lambda *_:
-                  show_app_picker(gk, s, info))
-
-    pick_contact.bind(on_release=lambda *_:
-                      show_contact_picker(gk, s, info))
-
-    row.add_widget(spinner)
-    row.add_widget(pick_app)
-    row.add_widget(pick_contact)
-
-    inner.add_widget(row)
-    inner.add_widget(info)
-    c.add_widget(inner)
-    grid.add_widget(c)
-
-
-# ============================================================
-# PAGE BUILDERS
-# ============================================================
-def page_gestures(grid, s):
-    grid.add_widget(UI.sec('5 Gestures x 17 Actions'))
-    for gk, gn in GESTURES:
-        gesture_card(grid, gk, gn, s)
-
-    grid.add_widget(UI.sec('Timing'))
-    grid.add_widget(UI.sld(
-        'Long Touch Duration',
-        f"{s.get('long_touch_duration')}ms",
-        200, 2000, s.get('long_touch_duration'),
-        lambda v: s.set('long_touch_duration', int(v)),
-        step=100, sfx='ms'
-    ))
-    grid.add_widget(UI.sld(
-        'Double Touch Speed',
-        f"{s.get('double_touch_speed')}ms",
-        150, 600, s.get('double_touch_speed'),
-        lambda v: s.set('double_touch_speed', int(v)),
-        step=50, sfx='ms'
-    ))
-    grid.add_widget(UI.sld(
-        'Touch Sensitivity',
-        {1: 'Low', 2: 'Normal', 3: 'High'}.get(
-            s.get('touch_sensitivity'), 'Normal'
-        ),
-        1, 3, s.get('touch_sensitivity'),
-        lambda v: s.set('touch_sensitivity', int(v))
-    ))
-
-
-def page_notch(grid, s):
-    grid.add_widget(UI.sec('Shape'))
-    for shapes in [['Rectangle', 'Rounded', 'Pill'],
-                   ['Island', 'Teardrop', 'Custom']]:
-        row = GridLayout(cols=3, spacing=dp(7), size_hint_y=None,
-                         height=dp(70))
-        for sh in shapes:
-            k = sh.lower()
-            down = s.get('notch_shape') == k
-            btn = ToggleButton(
-                text=sh, group='ns',
-                state='down' if down else 'normal',
-                background_color=[0, 0, 0, 0], background_normal='',
-                color=[1, 1, 1, 1], font_size=sp(11)
-            )
-            with btn.canvas.before:
-                col = Color(*get_color_from_hex(
-                    UI.ACC if down else UI.CARD
-                ))
-                rr = RoundedRectangle(pos=btn.pos, size=btn.size,
-                                      radius=[dp(10)])
-            UI._br(btn, rr)
-
-            def _st(i, v, _c=col, _k=k):
-                _c.rgba = get_color_from_hex(
-                    UI.ACC if v == 'down' else UI.CARD
-                )
-                if v == 'down':
-                    s.set('notch_shape', _k)
-
-            btn.bind(state=_st)
-            row.add_widget(btn)
-        grid.add_widget(row)
-
-    grid.add_widget(UI.sec('Size & Position'))
-    grid.add_widget(UI.sld('Width', f"{s.get('notch_width')}%",
-                           10, 100, s.get('notch_width'),
-                           lambda v: s.set('notch_width', int(v)),
-                           sfx='%'))
-    grid.add_widget(UI.sld('Height', f"{s.get('notch_height')}px",
-                           10, 80, s.get('notch_height'),
-                           lambda v: s.set('notch_height', int(v)),
-                           sfx='px'))
-    grid.add_widget(UI.sld('Corner', f"{s.get('notch_radius')}px",
-                           0, 50, s.get('notch_radius'),
-                           lambda v: s.set('notch_radius', int(v)),
-                           sfx='px'))
-    grid.add_widget(UI.sld('H Offset', str(s.get('h_offset')),
-                           -50, 50, s.get('h_offset'),
-                           lambda v: s.set('h_offset', int(v))))
-    grid.add_widget(UI.sld('V Offset', str(s.get('v_offset')),
-                           -20, 20, s.get('v_offset'),
-                           lambda v: s.set('v_offset', int(v))))
-    grid.add_widget(UI.sec('Preview'))
-    grid.add_widget(UI.preview())
-
-
-def page_theme(grid, s):
-    grid.add_widget(UI.sec('Color'))
-    box = GridLayout(cols=7, spacing=dp(8), size_hint_y=None,
-                     height=dp(50), padding=[dp(10), dp(5)])
-    with box.canvas.before:
-        Color(*get_color_from_hex(UI.CARD))
-        rr = RoundedRectangle(pos=box.pos, size=box.size,
-                              radius=[dp(12)])
-    UI._br(box, rr)
-    for c in ['#000000', '#6C63FF', '#FF5252', '#4CAF50',
-              '#FF9800', '#E91E63', '#FFFFFF']:
-        box.add_widget(UI.cbtn(c, lambda v: s.set('notch_color', v)))
-    grid.add_widget(box)
-
-    grid.add_widget(UI.sld('Opacity', f"{s.get('notch_opacity')}%",
-                           10, 100, s.get('notch_opacity'),
-                           lambda v: s.set('notch_opacity', int(v)),
-                           sfx='%'))
-    grid.add_widget(UI.sec('Effects'))
-    grid.add_widget(UI.sw('Border', s.get('show_border'),
-                          partial(s.set, 'show_border')))
-    grid.add_widget(UI.sw('Shadow', s.get('enable_shadow'),
-                          partial(s.set, 'enable_shadow')))
-
-
-def page_settings(grid, s):
-    grid.add_widget(UI.sec('Haptic'))
-    grid.add_widget(UI.sw('Vibrate', s.get('haptic_enabled'),
-                          partial(s.set, 'haptic_enabled')))
-    grid.add_widget(UI.sld(
-        'Intensity',
-        {1: 'Light', 2: 'Medium', 3: 'Strong'}.get(
-            s.get('haptic_intensity'), 'Medium'),
-        1, 3, s.get('haptic_intensity'),
-        lambda v: s.set('haptic_intensity', int(v))
-    ))
-    grid.add_widget(UI.sec('Service'))
-    grid.add_widget(UI.sw('Background', s.get('run_background'),
-                          partial(s.set, 'run_background')))
-    grid.add_widget(UI.sw('Boot Start', s.get('start_on_boot'),
-                          partial(s.set, 'start_on_boot')))
-    grid.add_widget(UI.sec('Data'))
-    grid.add_widget(UI.btn('Reset All',
-                           lambda: (s.reset(),
-                                    UI.popup('Done', 'All reset!')),
-                           UI.RED))
-
-
-# ============================================================
-# SCREENS
-# ============================================================
-class MainScreen(Screen):
-    def __init__(self, **kw):
-        super().__init__(name='main', **kw)
-
-    def on_pre_enter(self, *_):
-        self.clear_widgets()
-        app = App.get_running_app()
-        s = app.cfg
-        root = UI.bg()
-
-        # Header
-        hdr = BoxLayout(orientation='horizontal', size_hint_y=None,
-                        height=dp(58), padding=[dp(15), dp(10)])
-        with hdr.canvas.before:
-            Color(*get_color_from_hex(UI.TOP))
-            rr = RoundedRectangle(pos=hdr.pos, size=hdr.size,
-                                  radius=[0, 0, dp(18), dp(18)])
-        UI._br(hdr, rr)
-        hdr.add_widget(Label(text='Action Notch', font_size=sp(22),
-                             bold=True,
-                             color=get_color_from_hex(UI.ACC)))
-        hdr.add_widget(Label(text='v2.1', font_size=sp(11),
-                             color=get_color_from_hex(UI.SUB),
-                             size_hint_x=0.2))
-        root.add_widget(hdr)
-
-        sv, grid = UI.sgrid()
-
-        # Master switch
-        m = BoxLayout(orientation='horizontal', size_hint_y=None,
-                      height=dp(72), padding=[dp(18), dp(12)])
-        with m.canvas.before:
-            Color(*get_color_from_hex(UI.ACC))
-            rr2 = RoundedRectangle(pos=m.pos, size=m.size,
-                                   radius=[dp(16)])
-        UI._br(m, rr2)
-        mi = BoxLayout(orientation='vertical')
-        mi.add_widget(Label(text='Action Notch Active',
-                            font_size=sp(16), bold=True,
-                            color=[1, 1, 1, 1]))
-        mi.add_widget(Label(text='5 Gestures | 17 Actions',
-                            font_size=sp(11), color=[1, 1, 1, 0.7]))
-        m.add_widget(mi)
-        msw = Switch(active=s.get('master_enabled', True),
-                     size_hint_x=None, width=dp(55))
-        msw.bind(active=self._toggle)
-        m.add_widget(msw)
-        grid.add_widget(m)
-
-        # Status
-        sr = UI.card(h=dp(40))
-        self.sl = Label(text='Ready', font_size=sp(11),
-                        color=get_color_from_hex(UI.GRN),
-                        halign='center')
-        self.sl.bind(size=lambda i, v: setattr(i, 'text_size', v))
-        sr.add_widget(self.sl)
-        grid.add_widget(sr)
-
-        # Preview
-        grid.add_widget(UI.preview())
-
-        # Navigation
-        pages = [
-            ('  Controls', [
-                ('Gesture Controls', 'gestures'),
-            ]),
-            ('  Appearance', [
-                ('Notch Style', 'notch'),
-                ('Theme & Colors', 'theme'),
-            ]),
-            ('  More', [
-                ('Settings', 'settings'),
-                ('Statistics', 'stats'),
-                ('About', 'about'),
-            ]),
+    # ═══════════════════════════════════════════════════════════
+    #  CLOCK CALLBACKS
+    # ═══════════════════════════════════════════════════════════
+
+    def _tick(self, dt):
+        if self._cur_idx < 0 or not self._is_playing:
+            return
+        dur = self.engine.duration
+        pos = self.engine.position
+
+        if dur > 0 and not self._seeking:
+            self.seek_bar.max   = dur
+            self.seek_bar.value = min(pos, dur)
+
+        self.lbl_pos.text  = fmt_time(pos)
+        self.lbl_dur.text  = fmt_time(dur)
+        self.lbl_time.text = f"{fmt_time(pos)} / {fmt_time(dur)}"
+
+        if self._is_playing and not self.engine.is_busy:
+            self._on_track_end()
+
+    def _vu_tick(self, dt):
+        if not self._is_playing:
+            self.vu.levels = [0.0] * 20
+            return
+        self._vu_t += dt * 5.0
+        t = self._vu_t
+        self.vu.levels = [
+            abs(math.sin(t * (0.55 + i * 0.19) + i * 0.52))
+            * (0.28 + 0.72 * random.random())
+            for i in range(20)
         ]
-        for sec_title, items in pages:
-            grid.add_widget(UI.sec(sec_title))
-            for label, scr in items:
-                grid.add_widget(UI.nav(label, partial(self._go, scr)))
 
-        grid.add_widget(Widget(size_hint_y=None, height=dp(20)))
-        root.add_widget(sv)
-        self.add_widget(root)
+    # ═══════════════════════════════════════════════════════════
+    #  PLAYBACK
+    # ═══════════════════════════════════════════════════════════
 
-    def _toggle(self, inst, val):
-        app = App.get_running_app()
-        app.cfg.set('master_enabled', val)
-        if val:
-            self.sl.text = 'Active'
-            self.sl.color = get_color_from_hex(UI.GRN)
-            app.overlay.create()
+    def play_track(self, idx):
+        if idx < 0 or idx >= len(self._tracks):
+            return
+        self._cur_idx = idx
+        t = self._tracks[idx]
+        if self.engine.load(t["path"], t["dur_sec"]):
+            self.engine.play()
+            self._is_playing    = True
+            self.btn_play.text  = "⏸"
+            self.lbl_title.text  = t["title"]
+            self.lbl_artist.text = t["artist"]
+            self.lbl_album.text  = t["album"]
+            self.disc.start_spin()
+            self._refresh_playlist_ui()
         else:
-            self.sl.text = 'Stopped'
-            self.sl.color = get_color_from_hex(UI.RED)
-            app.overlay.remove()
+            self._popup("Error", f"Cannot open:\n{t['path']}")
 
-    def _go(self, n):
-        self.manager.transition = SlideTransition(direction='left')
-        self.manager.current = n
+    def _toggle_play(self):
+        if self._cur_idx < 0:
+            if self._tracks:
+                self.play_track(0)
+            return
+        if self._is_playing:
+            self.engine.pause()
+            self._is_playing   = False
+            self.btn_play.text = "▶"
+            self.disc.stop_spin()
+        else:
+            self.engine.resume()
+            self._is_playing   = True
+            self.btn_play.text = "⏸"
+            self.disc.start_spin()
 
+    def _prev(self):
+        if not self._tracks:
+            return
+        idx = (random.randrange(len(self._tracks)) if self._shuffle
+               else (self._cur_idx - 1) % len(self._tracks))
+        self.play_track(idx)
 
-class Sub(Screen):
-    def __init__(self, name, title, builder, **kw):
-        super().__init__(name=name, **kw)
-        self._t = title
-        self._b = builder
+    def _next(self):
+        if not self._tracks:
+            return
+        idx = (random.randrange(len(self._tracks)) if self._shuffle
+               else (self._cur_idx + 1) % len(self._tracks))
+        self.play_track(idx)
 
-    def on_pre_enter(self, *_):
-        self.clear_widgets()
-        root = UI.bg()
-        root.add_widget(UI.tbar(self._t, self._back))
-        sv, grid = UI.sgrid()
-        self._b(grid, App.get_running_app().cfg)
-        grid.add_widget(Widget(size_hint_y=None, height=dp(20)))
-        root.add_widget(sv)
-        self.add_widget(root)
+    def _on_track_end(self):
+        if self._repeat == 1:
+            self.play_track(self._cur_idx)
+        elif self._repeat == 2 or self._shuffle:
+            self._next()
+        elif self._cur_idx < len(self._tracks) - 1:
+            self._next()
+        else:
+            self._is_playing   = False
+            self.btn_play.text = "▶"
+            self.disc.stop_spin()
 
-    def _back(self):
-        self.manager.transition = SlideTransition(direction='right')
-        self.manager.current = 'main'
+    # ── seek ──────────────────────────────────────────────────
 
+    def _seek_down(self, widget, touch):
+        if widget.collide_point(*touch.pos):
+            self._seeking = True
 
-class StatsScreen(Screen):
-    def __init__(self, **kw):
-        super().__init__(name='stats', **kw)
+    def _seek_up(self, widget, touch):
+        if self._seeking:
+            self._seeking = False
+            self.engine.seek(widget.value)
 
-    def on_pre_enter(self, *_):
-        self.clear_widgets()
-        s = App.get_running_app().cfg
-        root = UI.bg()
-        root.add_widget(UI.tbar('Statistics', self._back))
-        sv, grid = UI.sgrid()
+    # ── shuffle / repeat ──────────────────────────────────────
 
-        for l, v, c in [
-            ('Total Actions', str(s.get('total_actions', 0)), UI.ACC),
-            ('Flashlight', str(s.get('flashlight_toggles', 0)), UI.ORG),
-            ('Screenshots', str(s.get('screenshots_taken', 0)), UI.GRN),
-        ]:
-            r = UI.card()
-            r.add_widget(UI.lbl(l))
-            r.add_widget(Label(
-                text=v, font_size=sp(15), bold=True,
-                color=get_color_from_hex(c),
-                size_hint_x=None, width=dp(80), halign='right'
-            ))
-            grid.add_widget(r)
-
-        grid.add_widget(UI.sec('Gesture Config'))
-        for gk, gn in GESTURES:
-            act = s.get(gk, 'Do Nothing')
-            extra = ''
-            if act == 'Open App':
-                extra = f' -> {s.get(f"{gk}_app_name", "?")}'
-            elif act == 'Call Contact':
-                extra = f' -> {s.get(f"{gk}_call_name", "?")}'
-            r = UI.card(h=dp(50))
-            r.add_widget(UI.lbl(gn, fs=sp(12)))
-            r.add_widget(UI.lbl(
-                f'{act}{extra}', fs=sp(10),
-                c=get_color_from_hex(UI.ACC), ha='right'
-            ))
-            grid.add_widget(r)
-
-        grid.add_widget(Widget(size_hint_y=None, height=dp(20)))
-        root.add_widget(sv)
-        self.add_widget(root)
-
-    def _back(self):
-        self.manager.transition = SlideTransition(direction='right')
-        self.manager.current = 'main'
-
-
-class AboutScreen(Screen):
-    def __init__(self, **kw):
-        super().__init__(name='about', **kw)
-
-    def on_pre_enter(self, *_):
-        self.clear_widgets()
-        root = UI.bg()
-        root.add_widget(UI.tbar('About', self._back))
-        sv, grid = UI.sgrid()
-        grid.add_widget(Widget(size_hint_y=None, height=dp(15)))
-        grid.add_widget(Label(
-            text='Action Notch', font_size=sp(28), bold=True,
-            color=get_color_from_hex(UI.ACC),
-            size_hint_y=None, height=dp(40)
-        ))
-        grid.add_widget(Label(
-            text='v2.1.0 - Fixed Edition', font_size=sp(13),
-            color=get_color_from_hex(UI.SUB),
-            size_hint_y=None, height=dp(22)
-        ))
-
-        grid.add_widget(UI.sec('5 Gestures'))
-        gestures_txt = '\n'.join([f'  {gn}' for _, gn in GESTURES])
-        grid.add_widget(UI.lbl(
-            gestures_txt, fs=sp(12),
-            c=get_color_from_hex('#AAAABB'),
-            shy=None, h=dp(80)
-        ))
-
-        grid.add_widget(UI.sec('17 Actions'))
-        actions_txt = '\n'.join(
-            [f'  {i+1}. {a}' for i, a in enumerate(ALL_ACTIONS)]
+    def _toggle_shuffle(self):
+        self._shuffle = not self._shuffle
+        self.btn_shuffle.background_color = (
+            list(C_ACCENT) if self._shuffle else list(C_SURFACE)
         )
-        grid.add_widget(UI.lbl(
-            actions_txt, fs=sp(11),
-            c=get_color_from_hex('#AAAABB'),
-            shy=None, h=dp(len(ALL_ACTIONS) * dp(4.5))
-        ))
 
-        grid.add_widget(Widget(size_hint_y=None, height=dp(20)))
-        root.add_widget(sv)
-        self.add_widget(root)
+    def _toggle_repeat(self):
+        self._repeat = (self._repeat + 1) % 3
+        self.btn_repeat.text             = ["↻", "🔂", "🔁"][self._repeat]
+        self.btn_repeat.background_color = [
+            list(C_SURFACE), list(C_ACCENT), list(C_PINK)
+        ][self._repeat]
 
-    def _back(self):
-        self.manager.transition = SlideTransition(direction='right')
-        self.manager.current = 'main'
+    # ═══════════════════════════════════════════════════════════
+    #  FILE MANAGEMENT
+    # ═══════════════════════════════════════════════════════════
 
-
-# ============================================================
-# ANDROID SETUP
-# ============================================================
-def android_setup():
-    if not IS_ANDROID:
-        return
-    try:
-        from jnius import autoclass
-        PA = autoclass('org.kivy.android.PythonActivity')
-        act = PA.mActivity
-        S = autoclass('android.provider.Settings')
-        I = autoclass('android.content.Intent')
-        U = autoclass('android.net.Uri')
-        Ctx = autoclass('android.content.Context')
-        PM = autoclass('android.os.PowerManager')
-
-        # Overlay permission
-        if not S.canDrawOverlays(act):
-            intent = I(S.ACTION_MANAGE_OVERLAY_PERMISSION,
-                       U.parse('package:' + act.getPackageName()))
-            act.startActivityForResult(intent, 1234)
-
-        # Battery optimization
-        pm = act.getSystemService(Ctx.POWER_SERVICE)
-        if not pm.isIgnoringBatteryOptimizations(act.getPackageName()):
-            intent = I()
-            intent.setAction(
-                S.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-            )
-            intent.setData(
-                U.parse('package:' + act.getPackageName())
-            )
-            act.startActivity(intent)
-
-    except Exception as e:
-        print(f'Android setup: {e}')
-
-
-# ============================================================
-# MAIN APP
-# ============================================================
-class ActionNotchApp(App):
-    def build(self):
-        self.title = 'Action Notch'
-        path = os.path.join(self.user_data_dir, 'settings.json')
-        self.cfg = Settings(path)
-        self.overlay = OverlayManager(self.cfg)
-
-        sm = ScreenManager()
-        sm.add_widget(MainScreen())
-        sm.add_widget(Sub('gestures', 'Gesture Controls', page_gestures))
-        sm.add_widget(Sub('notch', 'Notch Style', page_notch))
-        sm.add_widget(Sub('theme', 'Theme & Colors', page_theme))
-        sm.add_widget(Sub('settings', 'Settings', page_settings))
-        sm.add_widget(StatsScreen())
-        sm.add_widget(AboutScreen())
-
-        Clock.schedule_once(lambda dt: self._init(), 1.0)
-        return sm
-
-    def _init(self):
+    def _open_file_dialog(self):
         if IS_ANDROID:
-            android_setup()
-        if self.cfg.get('master_enabled', True):
-            self.overlay.create()
+            self._android_pick()
+            return
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
+            paths = filedialog.askopenfilenames(
+                title="Select audio files",
+                filetypes=[
+                    ("Audio files", "*.mp3 *.wav *.ogg *.flac *.m4a *.aac"),
+                    ("All files", "*.*"),
+                ],
+            )
+            r.destroy()
+            n = sum(1 for p in paths if self._add_track(p))
+            if n:
+                self._popup("Added", f"{n} track(s) added to playlist.")
+        except Exception as e:
+            self._popup("Error", str(e))
 
-    def on_pause(self):
-        self.cfg.save()
+    def _open_folder_dialog(self):
+        if IS_ANDROID:
+            self._popup("Info", "On Android please add files one by one.")
+            return
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
+            folder = filedialog.askdirectory(title="Select music folder")
+            r.destroy()
+            if not folder:
+                return
+            files = sorted(Path(folder).rglob("*"))
+            n = sum(1 for f in files
+                    if f.suffix.lower() in SUPPORTED_EXT
+                    and self._add_track(str(f)))
+            self._popup("Folder Loaded", f"{n} track(s) added.")
+        except Exception as e:
+            self._popup("Error", str(e))
+
+    def _android_pick(self):
+        try:
+            from jnius import autoclass
+            Intent  = autoclass("android.content.Intent")
+            ctx     = autoclass("org.kivy.android.PythonActivity").mActivity
+            intent  = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("audio/*")
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+            ctx.startActivityForResult(intent, 1001)
+        except Exception as e:
+            self._popup("Error", str(e))
+
+    def _add_track(self, path):
+        path = str(path)
+        if Path(path).suffix.lower() not in SUPPORTED_EXT:
+            return False
+        if not os.path.isfile(path):
+            return False
+        if any(t["path"] == path for t in self._tracks):
+            return False
+        title, artist, album, dur_sec = get_track_info(path)
+        self._tracks.append({
+            "path":     path,
+            "title":    title,
+            "artist":   artist,
+            "album":    album,
+            "dur_sec":  dur_sec,
+            "duration": fmt_time(dur_sec),
+        })
+        self._refresh_playlist_ui()
         return True
 
-    def on_resume(self):
-        self.cfg._load()
+    def remove_track(self, idx):
+        if idx < 0 or idx >= len(self._tracks):
+            return
+        self._tracks.pop(idx)
+        if idx == self._cur_idx:
+            self.engine.stop()
+            self._is_playing   = False
+            self._cur_idx      = -1
+            self.btn_play.text = "▶"
+            self.disc.stop_spin()
+            self.lbl_title.text  = "No track selected"
+            self.lbl_artist.text = "Unknown Artist"
+            self.lbl_album.text  = ""
+            self.lbl_time.text   = "0:00 / 0:00"
+        elif idx < self._cur_idx:
+            self._cur_idx -= 1
+        self._refresh_playlist_ui()
 
-    def on_stop(self):
-        self.cfg.save()
+    def _clear_playlist(self):
+        self.engine.stop()
+        self._tracks       = []
+        self._cur_idx      = -1
+        self._is_playing   = False
+        self.btn_play.text = "▶"
+        self.disc.stop_spin()
+        self.lbl_title.text  = "No track selected"
+        self.lbl_artist.text = "Unknown Artist"
+        self.lbl_album.text  = ""
+        self.lbl_time.text   = "0:00 / 0:00"
+        self._refresh_playlist_ui()
+
+    # ═══════════════════════════════════════════════════════════
+    #  PLAYLIST UI
+    # ═══════════════════════════════════════════════════════════
+
+    def _refresh_playlist_ui(self):
+        self.pl_box.clear_widgets()
+        for i, t in enumerate(self._tracks):
+            row = PlaylistRow(
+                index    = i,
+                title    = t["title"],
+                artist   = t["artist"],
+                duration = t["duration"],
+                selected = (i == self._cur_idx),
+                on_play  = self.play_track,
+                on_remove= self.remove_track,
+            )
+            self.pl_box.add_widget(row)
+        n = len(self._tracks)
+        self.lbl_count.text = f"{n} track{'s' if n != 1 else ''}"
+
+    # ═══════════════════════════════════════════════════════════
+    #  SAVE / LOAD
+    # ═══════════════════════════════════════════════════════════
+
+    def _save_playlist(self):
+        try:
+            data = [t["path"] for t in self._tracks]
+            with open(PLAYLIST_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            self._popup("Saved", f"Playlist saved — {len(data)} track(s).")
+        except Exception as e:
+            self._popup("Error", str(e))
+
+    def _load_playlist_file(self):
+        try:
+            if os.path.isfile(PLAYLIST_PATH):
+                with open(PLAYLIST_PATH, "r", encoding="utf-8") as f:
+                    paths = json.load(f)
+                for p in paths:
+                    self._add_track(p)
+        except Exception:
+            pass
+
+    # ═══════════════════════════════════════════════════════════
+    #  POPUP
+    # ═══════════════════════════════════════════════════════════
+
+    def _popup(self, title, message):
+        content = BoxLayout(
+            orientation="vertical", spacing=dp(10), padding=dp(14)
+        )
+        lbl = Label(
+            text=message, font_size=sp(13), color=C_TEXT,
+            halign="center", text_size=(dp(260), None),
+        )
+        content.add_widget(lbl)
+        ok = Button(
+            text="OK", size_hint_y=None, height=dp(40),
+            background_normal="", background_color=list(C_ACCENT),
+            color=C_TEXT, bold=True,
+        )
+        content.add_widget(ok)
+        pop = Popup(
+            title=title, content=content,
+            size_hint=(None, None), size=(dp(300), dp(190)),
+            background_color=list(C_CARD),
+            title_color=list(C_ACCENT),
+            separator_color=list(C_ACCENT),
+        )
+        ok.bind(on_release=pop.dismiss)
+        pop.open()
 
 
-if __name__ == '__main__':
-    ActionNotchApp().run()
+# ═══════════════════════════════════════════════════════════════
+#  RUN
+# ═══════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    NovaMusicApp().run()
