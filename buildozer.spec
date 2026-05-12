@@ -24,8 +24,9 @@ source.exclude_dirs = tests,bin,venv,.venv,.git,__pycache__
 version         = 1.0.0
 
 # ─── نیازمندی‌های پایتون ──────────────────────────────────────
-# همه کتابخانه‌های مورد نیاز پروژه
-requirements    = python3,\
+# python3 را به صورت صریح pin می‌کنیم تا از 3.14 استفاده نشود
+# p4a هنوز با Python 3.13+ ناسازگار است — از 3.11 استفاده کنید
+requirements    = python3==3.11.9,\
                   kivy==2.3.0,\
                   pygame,\
                   mutagen,\
@@ -87,11 +88,8 @@ android.private_storage = True
 android.accept_sdk_license = True
 
 # ─── تنظیمات p4a (python-for-android) ───────────────────────
-p4a.branch      = master
+p4a.branch      = releases/2024.01.21
 p4a.local_recipes =
-
-# اگر نسخه خاصی از p4a می‌خواهید:
-# p4a.branch = releases/2024.01.21
 
 # Bootstrap پیش‌فرض برای Kivy
 p4a.bootstrap   = sdl2
